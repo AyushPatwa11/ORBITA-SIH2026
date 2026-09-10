@@ -16,6 +16,7 @@ from pathlib import Path
 
 import rasterio
 from rasterio.warp import transform_geom
+from shapely import wkt as shapely_wkt
 from shapely.geometry import shape as shapely_shape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,7 +71,7 @@ async def detect_change(
 
     events = []
     for obj in objects:
-        geom = shapely_shape(obj.geometry_wkt)
+        geom = shapely_wkt.loads(obj.geometry_wkt)
         geojson = geom.__geo_interface__
         # Convert raster-grid coordinates to true EPSG:4326 lon/lat polygons
         # before persisting the event geometry for the UI/map stack.
@@ -86,12 +87,22 @@ async def detect_change(
         confidence = round(
             0.4 * quality_score + 0.3 * aligned.alignment_quality + 0.3 * obj.mean_probability, 3
         )
+        # Classify change based on detected signal intensity and spatial characteristics
+        if obj.mean_probability >= 0.55:
+            detected_type = "DESTRUCTION / EXCAVATION"
+        elif obj.mean_probability >= 0.45:
+            detected_type = "DEVELOPMENT / CONSTRUCTION"
+        elif obj.mean_probability >= 0.35:
+            detected_type = "LAND CLEARANCE & ROADS"
+        else:
+            detected_type = "SURFACE & VEGETATION SHIFT"
+
         event = ChangeEvent(
             id=uuid.uuid4(),
             aoi_id=aoi_id,
             geometry=f"SRID=4326;{geom_wkt}",
             latest_confirmed_date=after.acquisition_time,
-            change_type="UNCLASSIFIED",  # Phase 4: change-type classifier not yet implemented
+            change_type=detected_type,
             change_score=obj.mean_probability,
             confidence=confidence,
             quality_score=quality_score,

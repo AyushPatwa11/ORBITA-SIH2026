@@ -25,3 +25,6 @@ async def init_db():
             __import__("sqlalchemy").text("CREATE EXTENSION IF NOT EXISTS postgis")
         ))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(lambda sync_conn: sync_conn.execute(
+            __import__("sqlalchemy").text("ALTER TABLE scenes ADD COLUMN IF NOT EXISTS embedding_indexed BOOLEAN DEFAULT FALSE")
+        ))

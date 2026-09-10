@@ -112,4 +112,7 @@ async def similar_scenes_endpoint(
         raise HTTPException(404, "Scene not found")
     if not scene.local_path:
         raise HTTPException(409, "Scene has not been downloaded yet.")
-    return await find_similar_scenes(db, scene, k)
+    try:
+        return await find_similar_scenes(db, scene, k)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to retrieve similar scenes: {exc}")

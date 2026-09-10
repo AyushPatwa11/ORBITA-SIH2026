@@ -1,3 +1,6 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI

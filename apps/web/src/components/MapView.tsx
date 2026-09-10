@@ -1,17 +1,14 @@
 import maplibregl from "maplibre-gl";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOfflineMode } from "../App";
 import type { AOI, ChangeEvent, GeoJSONPolygon } from "../types";
 
-// Live mode: CartoDB's free dark basemap (external — disable before an
-// air-gapped/offline evaluation run). Offline mode: no external tiles at
-// all — a flat background + graticule so geometry is still legible.
 const LIVE_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
 const OFFLINE_STYLE: maplibregl.StyleSpecification = {
   version: 8,
   sources: {},
-  layers: [{ id: "bg", type: "background", paint: { "background-color": "#0b0e13" } }],
+  layers: [{ id: "bg", type: "background", paint: { "background-color": "#06080e" } }],
 };
 
 interface Props {
@@ -19,25 +16,76 @@ interface Props {
   changeEvents: ChangeEvent[];
   drawingEnabled: boolean;
   onBBoxDrawn: (polygon: GeoJSONPolygon) => void;
+  selectedAoi?: AOI | null;
+  selectedEvent?: ChangeEvent | null;
+  onSelectEvent?: (event: ChangeEvent) => void;
 }
 
-export function MapView({ aois, changeEvents, drawingEnabled, onBBoxDrawn }: Props) {
+function getPolygonBounds(coordinates: number[][][]): [[number, number], [number, number]] | null {
+  if (!coordinates || !coordinates.length || !coordinates[0].length) return null;
+  let minLng = Infinity;
+  let minLat = Infinity;
+  let maxLng = -Infinity;
+  let maxLat = -Infinity;
+
+  for (const ring of coordinates) {
+    for (const [lng, lat] of ring) {
+      if (typeof lng !== "number" || typeof lat !== "number") continue;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+  }
+
+  if (!Number.isFinite(minLng) || !Number.isFinite(minLat)) return null;
+  return [
+    [minLng, minLat],
+    [maxLng, maxLat],
+  ];
+}
+
+export function MapView({
+  aois,
+  changeEvents,
+  drawingEnabled,
+  onBBoxDrawn,
+  selectedAoi,
+  selectedEvent,
+  onSelectEvent,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const drawStateRef = useRef<{ first: [number, number] | null }>({ first: null });
+  const popupRef = useRef<maplibregl.Popup | null>(null);
   const offlineMode = useOfflineMode();
 
-  // init map once we know whether we're offline — never risk mounting
-  // against the live CDN basemap before that's confirmed
+  const [coords, setCoords] = useState<{ lng: number; lat: number; zoom: number }>({
+    lng: 82.95,
+    lat: 22.57,
+    zoom: 11,
+  });
+
+  // Initialize map
   useEffect(() => {
     if (!containerRef.current || offlineMode === null) return;
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: offlineMode ? OFFLINE_STYLE : LIVE_STYLE,
-      center: [78.9629, 22.5937], // India-centered default
-      zoom: 4,
+      center: [82.95, 22.57], // Centered around Korba demo area
+      zoom: 11,
     });
+
     map.addControl(new maplibregl.NavigationControl({}), "top-right");
+
+    map.on("mousemove", (e) => {
+      setCoords({
+        lng: Number(e.lngLat.lng.toFixed(4)),
+        lat: Number(e.lngLat.lat.toFixed(4)),
+        zoom: Number(map.getZoom().toFixed(1)),
+      });
+    });
+
     mapRef.current = map;
 
     return () => {
@@ -46,7 +94,7 @@ export function MapView({ aois, changeEvents, drawingEnabled, onBBoxDrawn }: Pro
     };
   }, [offlineMode === null]);
 
-  // click-to-draw bbox handler
+  // Click-to-draw bbox handler
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -84,7 +132,7 @@ export function MapView({ aois, changeEvents, drawingEnabled, onBBoxDrawn }: Pro
     };
   }, [drawingEnabled, onBBoxDrawn]);
 
-  // render AOI polygons — rebuilt whenever the list changes
+  // Render AOI polygons
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -98,7 +146,11 @@ export function MapView({ aois, changeEvents, drawingEnabled, onBBoxDrawn }: Pro
           .map((a) => ({
             type: "Feature",
             geometry: (a as any).geometry,
-            properties: { name: a.name },
+            properties: {
+              id: a.id,
+              name: a.name,
+              isSelected: selectedAoi?.id === a.id,
+            },
           })),
       };
 
@@ -107,77 +159,224 @@ export function MapView({ aois, changeEvents, drawingEnabled, onBBoxDrawn }: Pro
         existing.setData(geojson);
         return;
       }
+
       map.addSource(sourceId, { type: "geojson", data: geojson });
+
       map.addLayer({
         id: "aois-fill",
         type: "fill",
         source: sourceId,
-        paint: { "fill-color": "#4da3ff", "fill-opacity": 0.08 },
+        paint: {
+          "fill-color": [
+            "case",
+            ["==", ["get", "isSelected"], true],
+            "#00d2ff",
+            "#0284c7",
+          ],
+          "fill-opacity": 0.12,
+        },
       });
+
       map.addLayer({
         id: "aois-outline",
         type: "line",
         source: sourceId,
-        paint: { "line-color": "#4da3ff", "line-width": 1.5 },
+        paint: {
+          "line-color": [
+            "case",
+            ["==", ["get", "isSelected"], true],
+            "#00d2ff",
+            "#38bdf8",
+          ],
+          "line-width": ["case", ["==", ["get", "isSelected"], true], 2.5, 1.5],
+          "line-dasharray": [3, 2],
+        },
       });
     };
 
     if (map.isStyleLoaded()) render();
     else map.once("load", render);
-  }, [aois]);
+  }, [aois, selectedAoi]);
 
-  // render change-event markers
+  // Render Change Event Polygons & Markers
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const markers: maplibregl.Marker[] = [];
 
-    for (const evt of changeEvents) {
-      const geom = (evt as any).geometry;
-      if (!geom || !geom.coordinates?.[0]?.[0]) continue;
+    const renderEvents = () => {
+      const sourceId = "change-events-source";
+      const geojson: any = {
+        type: "FeatureCollection",
+        features: changeEvents
+          .filter((e) => (e as any).geometry)
+          .map((e) => ({
+            type: "Feature",
+            geometry: (e as any).geometry,
+            properties: {
+              id: e.id,
+              change_type: e.change_type,
+              confidence: (e.confidence * 100).toFixed(0) + "%",
+              category: e.evidence_category,
+              isSelected: selectedEvent?.id === e.id,
+            },
+          })),
+      };
 
-      const first = geom.coordinates[0][0];
-      const lng = Number(first[0]);
-      const lat = Number(first[1]);
-      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
-      if (lng < -180 || lng > 180 || lat < -90 || lat > 90) continue;
+      const existing = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+      if (existing) {
+        existing.setData(geojson);
+        return;
+      }
 
-      const color =
-        evt.evidence_category === "LIKELY_TRUE_CHANGE"
-          ? "#3fbf7f"
-          : evt.evidence_category === "POSSIBLE_CHANGE"
-          ? "#e0a53f"
-          : evt.evidence_category === "LIKELY_FALSE_CHANGE"
-          ? "#e0563f"
-          : "#6b7690";
+      map.addSource(sourceId, { type: "geojson", data: geojson });
 
-      const marker = new maplibregl.Marker({ color }).setLngLat([lng, lat]).addTo(map);
-      markers.push(marker);
+      // Change polygon fill
+      map.addLayer({
+        id: "change-events-fill",
+        type: "fill",
+        source: sourceId,
+        paint: {
+          "fill-color": [
+            "case",
+            ["==", ["get", "category"], "LIKELY_TRUE_CHANGE"],
+            "#10b981",
+            ["==", ["get", "category"], "POSSIBLE_CHANGE"],
+            "#f59e0b",
+            ["==", ["get", "category"], "LIKELY_FALSE_CHANGE"],
+            "#f43f5e",
+            "#00d2ff",
+          ],
+          "fill-opacity": 0.35,
+        },
+      });
+
+      // Change polygon glow border
+      map.addLayer({
+        id: "change-events-line",
+        type: "line",
+        source: sourceId,
+        paint: {
+          "line-color": [
+            "case",
+            ["==", ["get", "isSelected"], true],
+            "#ffffff",
+            ["==", ["get", "category"], "LIKELY_TRUE_CHANGE"],
+            "#10b981",
+            ["==", ["get", "category"], "POSSIBLE_CHANGE"],
+            "#f59e0b",
+            "#f43f5e",
+          ],
+          "line-width": ["case", ["==", ["get", "isSelected"], true], 3, 2],
+        },
+      });
+
+      // Click on change polygon to select
+      map.on("click", "change-events-fill", (e) => {
+        if (!e.features || !e.features.length) return;
+        const clickedId = e.features[0].properties?.id;
+        const match = changeEvents.find((evt) => evt.id === clickedId);
+        if (match && onSelectEvent) {
+          onSelectEvent(match);
+        }
+      });
+
+      map.on("mouseenter", "change-events-fill", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "change-events-fill", () => {
+        map.getCanvas().style.cursor = "";
+      });
+    };
+
+    if (map.isStyleLoaded()) renderEvents();
+    else map.once("load", renderEvents);
+  }, [changeEvents, selectedEvent, onSelectEvent]);
+
+  // Fly to selected AOI or initial AOIs
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (selectedAoi && selectedAoi.geometry) {
+      const bounds = getPolygonBounds(selectedAoi.geometry.coordinates);
+      if (bounds) {
+        map.fitBounds(bounds, { padding: 60, maxZoom: 14, duration: 1200 });
+        return;
+      }
     }
 
-    return () => markers.forEach((m) => m.remove());
-  }, [changeEvents]);
+    if (selectedEvent && selectedEvent.geometry) {
+      const bounds = getPolygonBounds(selectedEvent.geometry.coordinates);
+      if (bounds) {
+        map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 1200 });
+        return;
+      }
+    }
+
+    // Otherwise if we have AOIs but nothing selected, fit to first AOI
+    if (aois.length > 0 && aois[0].geometry) {
+      const bounds = getPolygonBounds(aois[0].geometry.coordinates);
+      if (bounds) {
+        map.fitBounds(bounds, { padding: 50, maxZoom: 13, duration: 800 });
+      }
+    }
+  }, [selectedAoi, selectedEvent, aois]);
 
   return (
     <div className="map-container">
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+
+      {/* Drawing helper banner */}
       {drawingEnabled && (
         <div
           style={{
             position: "absolute",
-            top: 12,
-            left: 12,
-            background: "var(--bg-2)",
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            padding: "6px 10px",
+            top: 14,
+            left: 14,
+            background: "rgba(16, 22, 35, 0.9)",
+            backdropFilter: "blur(8px)",
+            border: "1px solid var(--accent)",
+            boxShadow: "0 0 16px var(--accent-glow)",
+            borderRadius: 8,
+            padding: "8px 14px",
             fontSize: 12,
-            color: "var(--text-mid)",
+            color: "var(--text-hi)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            zIndex: 10,
           }}
         >
-          Click two corners to draw an AOI bounding box
+          <span className="pulse-dot" />
+          Click two diagonal points on the map to define the AOI bounding box
         </div>
       )}
+
+      {/* Map Telemetry HUD bottom-left */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 12,
+          left: 12,
+          background: "rgba(10, 14, 23, 0.8)",
+          backdropFilter: "blur(10px)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          padding: "4px 10px",
+          fontSize: 10.5,
+          fontFamily: "var(--mono)",
+          color: "var(--text-low)",
+          display: "flex",
+          gap: 12,
+          zIndex: 10,
+          pointerEvents: "none",
+        }}
+      >
+        <span>LAT: {coords.lat}° N</span>
+        <span>LNG: {coords.lng}° E</span>
+        <span>ZOOM: {coords.zoom}x</span>
+        <span>CRS: EPSG:4326</span>
+      </div>
     </div>
   );
 }

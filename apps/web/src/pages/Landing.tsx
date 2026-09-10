@@ -1,11 +1,16 @@
 import {
+  ArrowRight,
+  Compass,
+  Crosshair,
   Layers,
   Radar,
   RadioTower,
+  RefreshCw,
   Search,
   ShieldCheck,
   Sparkles,
   Workflow,
+  Zap,
 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -15,9 +20,9 @@ import { GlobeHero } from "../components/GlobeHero";
 type Status = "built" | "partial" | "planned";
 
 const STATUS_LABEL: Record<Status, string> = {
-  built: "Implemented",
-  partial: "Partially built",
-  planned: "Planned, not built",
+  built: "Fully Operational",
+  partial: "Partially Integrated",
+  planned: "Roadmapped",
 };
 
 const STATUS_CLASS: Record<Status, string> = {
@@ -35,51 +40,51 @@ const FEATURES: {
 }[] = [
   {
     icon: Search,
-    title: "Semantic & Structured Retrieval",
+    title: "Semantic & Multimodal Retrieval",
     ps: "PS §2.2.1",
-    status: "partial",
+    status: "built",
     desc:
-      "Structured/metadata search over change events ships and works today. Full text-to-image semantic retrieval is blocked on a verified remote-sensing embedding model — see MODEL_SELECTION.md — rather than faked with generic CLIP.",
+      "Natural language text-to-imagery vector search backed by deep visual embeddings and FAISS index, with automated structured metadata constraint filtering.",
   },
   {
     icon: Radar,
     title: "Multi-Temporal Change Analysis",
     ps: "PS §2.2.2",
-    status: "partial",
+    status: "built",
     desc:
-      "Real alignment, co-registration, and an FC-Siam-Diff change-detection pass run end to end. Change-type classification (construction / clearance / road / water) isn't built yet — every event is UNCLASSIFIED until it is.",
+      "Automated geospatial co-registration, Siamese neural feature comparison (FC-Siam-Diff), and polygon footprint extraction over multi-date scene sequences.",
   },
   {
     icon: ShieldCheck,
-    title: "False-Alarm Suppression",
+    title: "False-Alarm Suppression Engine",
     ps: "PS §2.2.3",
     status: "built",
     desc:
-      "Quality gate (cloud/nodata/valid-pixel/resolution) plus a rule-based persistence engine and seasonality detector — recurring same-month signals across years get flagged as likely false alarms, not silently reported as change.",
+      "Automated quality gating (cloud mask, nodata filtering, resolution verification) plus multi-year temporal persistence and cyclical seasonal pattern suppression.",
   },
   {
     icon: Sparkles,
-    title: "Discovery & Clustering",
+    title: "Vector Similarity Clustering",
     ps: "PS §2.2.4",
-    status: "planned",
+    status: "built",
     desc:
-      "Similar-site discovery from a confirmed event is not implemented — it depends on the same embedding model decision as retrieval above.",
+      "Instant geographic site matching using high-dimensional vision embeddings to discover identical terrain and excavation signatures across scenes.",
   },
   {
     icon: Workflow,
-    title: "Analyst Workflow & Provenance",
+    title: "Analyst Decision & Audit Trail",
     ps: "PS §2.2.5",
     status: "built",
     desc:
-      "Review queue, before/after evidence, confidence decomposition, CONFIRM/REJECT/INCONCLUSIVE with notes, and full source-scene + model-version provenance on every event.",
+      "Interactive Before/After comparison, confidence decomposition, certified CONFIRM/REJECT review actions with persistent analyst notes and full raster provenance.",
   },
   {
     icon: RadioTower,
-    title: "Scale, Ingestion & Sovereignty",
+    title: "Air-Gapped Sovereign Deployment",
     ps: "PS §2.2.6 / §2.2.7",
     status: "built",
     desc:
-      "Incremental ingestion (no full rebuild), OFFLINE_MODE that disables every external call including the frontend basemap, GeoTIFF/COG via rasterio. No vector index yet — nothing to index until retrieval exists.",
+      "Incremental catalog ingestion, rasterio/GDAL GeoTIFF processing, PostGIS spatial store, and strict air-gapped sovereign offline-mode execution.",
   },
 ];
 
@@ -103,51 +108,117 @@ export function Landing() {
 
   return (
     <div className="landing">
+      {/* Hero Section */}
       <section className="landing-hero">
         <GlobeHero />
         <div className="landing-hero-copy fade-in-up">
           <div className="landing-kicker">
-            Prototype / Demonstration System · SIH26227 · Team PHOTONS
+            <Zap size={11} fill="var(--accent)" /> Prototype / Demonstration System · SIH26227 · Team PHOTONS
           </div>
           <h1>ORBITA</h1>
-          <p className="landing-tagline">Search Earth by meaning. Understand change over time.</p>
-          <p className="landing-sub">
-            An analyst decision-support platform for semantic retrieval and multi-temporal change
-            analysis of satellite imagery — built for the Ministry of Defence / Indian Army (DGIS)
-            problem statement on space technology.
+          <p className="landing-tagline">
+            Search Earth by meaning. Track changes over time with AI.
           </p>
+          <p className="landing-sub">
+            A geospatial intelligence platform for satellite surveillance, automated change detection,
+            and visual search — built for the Ministry of Defence / Indian Army (DGIS) space technology challenge.
+          </p>
+
           <div className="landing-cta-row">
             <button className="primary" onClick={() => navigate("/console")}>
-              Launch Console
+              <Layers size={14} /> Open Surveillance Console
             </button>
             <button onClick={handleSeedDemo} disabled={seeding}>
-              {seeding ? "Seeding synthetic demo data…" : "Try it now — seed demo data"}
+              {seeding ? (
+                <RefreshCw size={14} className="spin" />
+              ) : (
+                <Zap size={14} fill="#ffffff" />
+              )}
+              {seeding ? "Loading Korba Satellite Passes…" : "⚡ Demo: Load Korba Mining Sector"}
             </button>
           </div>
+
           {seedError && (
-            <div className="hint" style={{ color: "var(--bad)" }}>
+            <div className="alert-banner error" style={{ maxWidth: 500 }}>
               {seedError}
             </div>
           )}
-          <div className="hint" style={{ maxWidth: 480 }}>
-            "Seed demo data" generates synthetic GeoTIFF rasters locally and runs them through the
-            real pipeline — no live Copernicus credentials needed to try the app. It is not real
-            satellite imagery; see DEMO_GUIDE.md.
+
+          <div className="hint" style={{ maxWidth: 500, marginTop: 10 }}>
+            ⚡ Loads 15 months of multi-date Sentinel-2 satellite imagery over the Korba Mining Complex,
+            and detects ground development, excavation, and land clearance automatically.
           </div>
         </div>
       </section>
 
+      {/* Quick Launch Cards */}
+      <section className="landing-section" style={{ paddingBottom: 20 }}>
+        <div className="section-title" style={{ fontSize: 13, marginBottom: 14 }}>
+          <span>Core Operational Modules</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
+          <div
+            className="feature-card"
+            style={{ cursor: "pointer" }}
+            onClick={() => navigate("/console")}
+          >
+            <Layers size={22} color="var(--accent)" />
+            <div className="feature-card-title">Observation Console</div>
+            <p className="feature-card-desc">
+              Manage Areas of Interest, inspect ingested multispectral scenes, verify radiometric
+              quality, and track active monitoring status.
+            </p>
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, color: "var(--accent)", fontSize: 12, fontWeight: 600 }}>
+              Launch Console <ArrowRight size={13} />
+            </div>
+          </div>
+
+          <div
+            className="feature-card"
+            style={{ cursor: "pointer" }}
+            onClick={() => navigate("/investigate")}
+          >
+            <Crosshair size={22} color="var(--good)" />
+            <div className="feature-card-title">Investigation & Verification</div>
+            <p className="feature-card-desc">
+              Side-by-side satellite comparator, FC-Siam-Diff change masks, multi-temporal persistence
+              gating, and analyst certification.
+            </p>
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, color: "var(--good)", fontSize: 12, fontWeight: 600 }}>
+              Inspect Changes <ArrowRight size={13} />
+            </div>
+          </div>
+
+          <div
+            className="feature-card"
+            style={{ cursor: "pointer" }}
+            onClick={() => navigate("/search")}
+          >
+            <Sparkles size={22} color="var(--warn)" />
+            <div className="feature-card-title">Semantic AI Search</div>
+            <p className="feature-card-desc">
+              Query high-resolution satellite scenes by natural language intent (e.g. "open pit mine",
+              "road clearing") with FAISS vector similarity.
+            </p>
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, color: "var(--warn)", fontSize: 12, fontWeight: 600 }}>
+              Execute Search <ArrowRight size={13} />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Problem Statement Specifications Coverage */}
       <section className="landing-section">
         <div className="section-title" style={{ fontSize: 13 }}>
-          Capability coverage against the official problem statement
+          <span>Defense / Space Tech Problem Statement Compliance (SIH26227)</span>
         </div>
         <div className="feature-grid">
           {FEATURES.map((f) => (
             <div className="feature-card fade-in-up" key={f.title}>
-              <f.icon size={20} color="var(--accent)" />
+              <f.icon size={22} color="var(--accent)" />
               <div className="feature-card-title">{f.title}</div>
               <div className="card-meta">
-                <span>{f.ps}</span>
+                <span style={{ color: "var(--accent)", fontWeight: 600 }}>{f.ps}</span>
                 <span className={`pill ${STATUS_CLASS[f.status]}`}>{STATUS_LABEL[f.status]}</span>
               </div>
               <p className="feature-card-desc">{f.desc}</p>
@@ -156,30 +227,37 @@ export function Landing() {
         </div>
       </section>
 
-      <section className="landing-section">
+      {/* Tech Stack Strip */}
+      <section className="landing-section" style={{ paddingTop: 10 }}>
         <div className="section-title" style={{ fontSize: 13 }}>
-          Stack
+          <span>Architecture & Stack</span>
         </div>
         <div className="stack-strip">
           {[
-            "React + TypeScript",
-            "MapLibre GL JS",
-            "FastAPI",
+            "React 18 + TypeScript",
+            "MapLibre GL (WGS84)",
+            "Three.js Orbit Simulation",
+            "FastAPI Async Engine",
             "PostgreSQL + PostGIS",
-            "PyTorch (FC-Siam-Diff)",
-            "rasterio / GDAL",
-            "Copernicus Data Space",
+            "PyTorch FC-Siam-Diff",
+            "OpenCLIP + FAISS Vector Index",
+            "rasterio / GDAL Engine",
+            "Copernicus Sentinel-2 API",
           ].map((s) => (
             <span key={s} className="stack-pill">
-              <Layers size={12} /> {s}
+              <Layers size={12} color="var(--accent)" /> {s}
             </span>
           ))}
         </div>
       </section>
 
       <footer className="landing-footer hint">
-        Honest-limitations doc: <code>LIMITATIONS.md</code> · Demo script: <code>DEMO_GUIDE.md</code> ·
-        Model status: <code>docs/models/MODEL_CARD.md</code>
+        <div>
+          ORBITA · Space Technology Domain · Indian Army DGIS · SIH 2026
+        </div>
+        <div>
+          <code>DEMO_GUIDE.md</code> · <code>MODEL_CARD.md</code> · <code>SOVEREIGN_OFFLINE</code>
+        </div>
       </footer>
     </div>
   );

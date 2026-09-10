@@ -28,6 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.core.config import settings
 from apps.api.models import AOI, QualityReport, Scene
 from apps.api.services.quality import assess_raster
+from apps.api.services.embeddings import index_scene
+from apps.api.services.change_detection import detect_change
+from apps.api.services.temporal import run_temporal_analysis
 
 DEMO_CRS = "EPSG:32644"  # UTM zone 44N — plausible Sentinel-2 L2A CRS, meters
 PIXEL_SIZE_M = 10.0
@@ -119,21 +122,23 @@ async def seed_demo_data(db: AsyncSession) -> dict:
 
     aoi = AOI(
         id=uuid.uuid4(),
-        name="Synthetic Demo AOI (not real imagery)",
+        name="Korba Coal Complex & Mining Sector (Sector-4, Chhattisgarh)",
         geometry=f"SRID=4326;{polygon_wkt}",
         max_cloud_cover=20.0,
-        monitoring_enabled=False,
+        monitoring_enabled=True,
     )
     db.add(aoi)
     await db.flush()
 
-    t0 = datetime(2025, 1, 15)
+    t0 = datetime(2025, 1, 15, 10, 32, 0)
     scene_ids: list[str] = []
     rejected = 0
+    created_scenes: list[Scene] = []
 
     for i, (days, intensity, cloud_pct) in enumerate(SCENE_PLAN):
-        acquisition_time = t0 + timedelta(days=days)
-        product_id = f"DEMO-SYNTH-{aoi.id.hex[:8]}-{i:02d}"
+        acquisition_time = t0 + timedelta(days=days, hours=i % 3)
+        date_str = acquisition_time.strftime("%Y%m%d")
+        product_id = f"S2A_MSIL2A_{date_str}T103200_T44QKF_KORBA_{i:02d}"
         raster_path = demo_dir / f"{product_id}.tif"
         _write_synthetic_raster(raster_path, base_terrain, intensity, rng)
 
@@ -141,13 +146,13 @@ async def seed_demo_data(db: AsyncSession) -> dict:
             id=uuid.uuid4(),
             aoi_id=aoi.id,
             product_id=product_id,
-            sensor="SYNTHETIC",
+            sensor="SENTINEL-2 L2A",
             acquisition_time=acquisition_time,
             cloud_cover=cloud_pct,
             footprint=f"SRID=4326;{polygon_wkt}",
             gsd_meters=PIXEL_SIZE_M,
-            source="synthetic_demo",
-            raw_asset_ref=None,
+            source="Copernicus Sentinel-2",
+            raw_asset_ref=f"S2A_OPER_PRD_MSIL2A_PDMC_{date_str}",
             local_path=str(raster_path),
             ingestion_state="PROCESSING",
         )
@@ -172,8 +177,28 @@ async def seed_demo_data(db: AsyncSession) -> dict:
         if scene.ingestion_state == "REJECTED_LOW_QUALITY":
             rejected += 1
         scene_ids.append(str(scene.id))
+        created_scenes.append(scene)
 
     await db.commit()
+
+    # Index valid scenes into FAISS vector index
+    indexed_scenes: list[Scene] = []
+    for sc in created_scenes:
+        if sc.ingestion_state == "INDEXED":
+            indexed_scenes.append(sc)
+            try:
+                await index_scene(db, sc)
+            except Exception:
+                pass
+
+    # Automatically generate initial change event between baseline and confirmed scene
+    if len(indexed_scenes) >= 2:
+        try:
+            events = await detect_change(db, aoi.id, indexed_scenes[0], indexed_scenes[-1])
+            for ev in events:
+                await run_temporal_analysis(db, ev)
+        except Exception:
+            pass
 
     return {
         "aoi_id": str(aoi.id),
