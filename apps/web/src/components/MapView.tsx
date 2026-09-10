@@ -134,7 +134,14 @@ export function MapView({ aois, changeEvents, drawingEnabled, onBBoxDrawn }: Pro
 
     for (const evt of changeEvents) {
       const geom = (evt as any).geometry;
-      if (!geom) continue;
+      if (!geom || !geom.coordinates?.[0]?.[0]) continue;
+
+      const first = geom.coordinates[0][0];
+      const lng = Number(first[0]);
+      const lat = Number(first[1]);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      if (lng < -180 || lng > 180 || lat < -90 || lat > 90) continue;
+
       const color =
         evt.evidence_category === "LIKELY_TRUE_CHANGE"
           ? "#3fbf7f"
@@ -143,7 +150,7 @@ export function MapView({ aois, changeEvents, drawingEnabled, onBBoxDrawn }: Pro
           : evt.evidence_category === "LIKELY_FALSE_CHANGE"
           ? "#e0563f"
           : "#6b7690";
-      const [lng, lat] = geom.coordinates?.[0]?.[0] ?? [0, 0];
+
       const marker = new maplibregl.Marker({ color }).setLngLat([lng, lat]).addTo(map);
       markers.push(marker);
     }

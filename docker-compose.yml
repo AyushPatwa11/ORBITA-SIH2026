@@ -38,21 +38,5 @@ services:
       - ./apps/api:/app/apps/api
       - ./ml:/app/ml
 
-  worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
-    command: python -m apps.api.worker
-    env_file: .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    volumes:
-      - ./data:/data
-      - ./apps/api:/app/apps/api
-      - ./ml:/app/ml
-
 volumes:
   pgdata:

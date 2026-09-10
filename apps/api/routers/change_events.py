@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from geoalchemy2.shape import to_shape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from apps.api.core.db import get_db
 from apps.api.models import ChangeEvent, ChangeObservation, Scene
@@ -61,8 +62,15 @@ async def download_scene(scene_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 
 @router.post("/change-events/detect", response_model=list[ChangeEventOut])
 async def trigger_change_detection(payload: ChangeDetectRequest, db: AsyncSession = Depends(get_db)):
-    before = await db.get(Scene, payload.before_scene_id)
-    after = await db.get(Scene, payload.after_scene_id)
+    result = await db.execute(
+        select(Scene)
+        .where(Scene.id.in_([payload.before_scene_id, payload.after_scene_id]))
+        .options(selectinload(Scene.quality_report))
+    )
+    scenes = {str(scene.id): scene for scene in result.scalars().all()}
+
+    before = scenes.get(str(payload.before_scene_id))
+    after = scenes.get(str(payload.after_scene_id))
     if not before or not after:
         raise HTTPException(404, "One or both scenes not found")
     if before.ingestion_state != "INDEXED" or after.ingestion_state != "INDEXED":

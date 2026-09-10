@@ -1,13 +1,16 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.db import get_db
 from apps.api.models import AOI, Scene
 from apps.api.schemas import IngestionTriggerOut, SceneOut
-from apps.api.services.ingestion import run_ingestion_for_aoi
+from apps.api.services.ingestion import (
+    register_scene_from_metadata_sidecar,
+    run_ingestion_for_aoi,
+)
 from apps.api.services.preview import render_rgb_preview
 
 router = APIRouter(tags=["scenes"])
@@ -21,11 +24,31 @@ async def trigger_ingestion(aoi_id: uuid.UUID, db: AsyncSession = Depends(get_db
 
     job = await run_ingestion_for_aoi(db, aoi)
     if job.status == "FAILED":
-        raise HTTPException(502, f"Ingestion failed: {job.error}")
+        raise HTTPException(500, f"Ingestion failed: {job.error}")
 
     return IngestionTriggerOut(
         job_id=job.id, aoi_id=aoi_id, status=job.status, scenes_found=job.scenes_found
     )
+
+
+@router.post("/aois/{aoi_id}/register-from-sidecar")
+async def register_from_sidecar(
+    aoi_id: uuid.UUID,
+    metadata_path: str = Body(..., embed=False),
+    db: AsyncSession = Depends(get_db),
+):
+    aoi = await db.get(AOI, aoi_id)
+    if not aoi:
+        raise HTTPException(404, "AOI not found")
+
+    scene = await register_scene_from_metadata_sidecar(db, aoi_id, metadata_path)
+    return {
+        "scene_id": str(scene.id),
+        "product_id": scene.product_id,
+        "sensor": scene.sensor,
+        "ingestion_state": scene.ingestion_state,
+        "local_path": scene.local_path,
+    }
 
 
 @router.get("/aois/{aoi_id}/scenes", response_model=list[SceneOut])

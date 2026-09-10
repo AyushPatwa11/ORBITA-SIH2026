@@ -10,14 +10,21 @@ no OSCD evaluation has been run against these weights (see
 docs/models/MODEL_CARD.md).
 """
 
+import os
 import uuid
 from pathlib import Path
 
+import rasterio
+from rasterio.warp import transform_geom
+from shapely.geometry import shape as shapely_shape
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.models import ChangeEvent, Scene
+from apps.api.models import ChangeEvent, QualityReport, Scene
 from apps.api.services.alignment import align_pair
 from ml.inference.change_inference import load_model, run_change_inference
+
+os.environ.setdefault("GDAL_MEM_ENABLE_OPEN", "YES")
 
 _MODEL_CACHE: dict[str, object] = {}
 
@@ -39,6 +46,17 @@ async def detect_change(
     if not before.local_path or not after.local_path:
         raise ValueError("Both scenes must be downloaded (INDEXED) before change detection.")
 
+    # Read quality scores through explicit SQL, not relationship lazy loading.
+    before_report = await db.execute(select(QualityReport).where(QualityReport.scene_id == before.id))
+    after_report = await db.execute(select(QualityReport).where(QualityReport.scene_id == after.id))
+    before_quality = before_report.scalar_one_or_none()
+    after_quality = after_report.scalar_one_or_none()
+
+    quality_score = min(
+        (before_quality.quality_score if before_quality else 0.5),
+        (after_quality.quality_score if after_quality else 0.5),
+    )
+
     aligned = align_pair(before.local_path, after.local_path)
     if not aligned.accepted:
         # Alignment too poor to trust — record nothing rather than emit a
@@ -50,13 +68,19 @@ async def detect_change(
         model, aligned.before, aligned.after, aligned.valid_mask, aligned.transform, aligned.crs
     )
 
-    quality_score = min(
-        (before.quality_report.quality_score if before.quality_report else 0.5),
-        (after.quality_report.quality_score if after.quality_report else 0.5),
-    )
-
     events = []
     for obj in objects:
+        geom = shapely_shape(obj.geometry_wkt)
+        geojson = geom.__geo_interface__
+        # Convert raster-grid coordinates to true EPSG:4326 lon/lat polygons
+        # before persisting the event geometry for the UI/map stack.
+        try:
+            lonlat_geojson = transform_geom(aligned.crs, "EPSG:4326", geojson)
+            geom = shapely_shape(lonlat_geojson)
+            geom_wkt = geom.wkt
+        except Exception:
+            geom_wkt = obj.geometry_wkt
+
         # Placeholder decomposition — replace model_score weighting once
         # OSCD evaluation gives a calibrated operating point.
         confidence = round(
@@ -65,7 +89,7 @@ async def detect_change(
         event = ChangeEvent(
             id=uuid.uuid4(),
             aoi_id=aoi_id,
-            geometry=f"SRID=4326;{obj.geometry_wkt}",
+            geometry=f"SRID=4326;{geom_wkt}",
             latest_confirmed_date=after.acquisition_time,
             change_type="UNCLASSIFIED",  # Phase 4: change-type classifier not yet implemented
             change_score=obj.mean_probability,

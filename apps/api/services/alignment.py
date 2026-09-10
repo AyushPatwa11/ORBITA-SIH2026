@@ -11,10 +11,14 @@ caller should lower confidence or reject the comparison rather than
 silently feeding misaligned pixels to change detection.
 """
 
+import os
 from dataclasses import dataclass
+
+os.environ.setdefault("GDAL_MEM_ENABLE_OPEN", "YES")
 
 import numpy as np
 import rasterio
+from rasterio.env import Env
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 from skimage.registration import phase_cross_correlation
 from scipy.ndimage import shift as nd_shift
@@ -35,31 +39,33 @@ class AlignedPair:
 
 
 def _reproject_to_grid(path: str, dst_crs: str, dst_transform, width: int, height: int) -> np.ndarray:
-    with rasterio.open(path) as src:
-        n_bands = src.count
-        dst = np.zeros((n_bands, height, width), dtype=np.float32)
-        for b in range(1, n_bands + 1):
-            reproject(
-                source=rasterio.band(src, b),
-                destination=dst[b - 1],
-                src_transform=src.transform,
-                src_crs=src.crs,
-                dst_transform=dst_transform,
-                dst_crs=dst_crs,
-                resampling=Resampling.bilinear,
-            )
+    with Env(GDAL_MEM_ENABLE_OPEN="YES"):
+        with rasterio.open(path) as src:
+            n_bands = src.count
+            dst = np.zeros((n_bands, height, width), dtype=np.float32)
+            for b in range(1, n_bands + 1):
+                reproject(
+                    source=rasterio.band(src, b),
+                    destination=dst[b - 1],
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=dst_transform,
+                    dst_crs=dst_crs,
+                    resampling=Resampling.bilinear,
+                )
     return dst
 
 
 def align_pair(before_path: str, after_path: str, target_gsd: float = 10.0) -> AlignedPair:
-    with rasterio.open(before_path) as ref:
-        dst_crs = ref.crs
-        dst_transform, width, height = calculate_default_transform(
-            ref.crs, dst_crs, ref.width, ref.height, *ref.bounds, resolution=target_gsd
-        )
+    with Env(GDAL_MEM_ENABLE_OPEN="YES"):
+        with rasterio.open(before_path) as ref:
+            dst_crs = ref.crs
+            dst_transform, width, height = calculate_default_transform(
+                ref.crs, dst_crs, ref.width, ref.height, *ref.bounds, resolution=target_gsd
+            )
 
-    before = _reproject_to_grid(before_path, dst_crs, dst_transform, width, height)
-    after = _reproject_to_grid(after_path, dst_crs, dst_transform, width, height)
+        before = _reproject_to_grid(before_path, dst_crs, dst_transform, width, height)
+        after = _reproject_to_grid(after_path, dst_crs, dst_transform, width, height)
 
     # Co-registration: estimate residual shift on band 1 via phase correlation.
     # Note: skimage's own "error" output is not used for confidence — with a

@@ -72,32 +72,49 @@ async def search_catalog(
     date_from: str,
     date_to: str,
     max_cloud_cover: float = 20.0,
-    collection: str = "SENTINEL-2",
+    collection: str = "sentinel-2-l2a",
     limit: int = 50,
 ) -> list[dict]:
     """
     Query the STAC Catalog API for scenes intersecting bbox within a date
     range and below a cloud-cover threshold. Returns raw STAC items;
     the ingestion service is responsible for turning these into Scene rows.
+
+    The Copernicus Data Space collection registry is versioned and has
+    renamed the legacy Sentinel-2 collection label several times. Try the
+    requested collection first, but if the service rejects it as a missing
+    collection, fall through to the known live L2A collection alias.
     """
     if settings.offline_mode:
         raise RuntimeError("OFFLINE_MODE is enabled — catalog search is disabled.")
 
     token = await get_access_token()
-    body = {
-        "collections": [collection],
-        "bbox": bbox,
-        "datetime": f"{date_from}/{date_to}",
-        "limit": limit,
-        "query": {"eo:cloud_cover": {"lt": max_cloud_cover}},
-    }
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{settings.copernicus_catalog_url}/search",
-            json=body,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if resp.status_code != 200:
-        raise RuntimeError(f"Catalog search failed: {resp.status_code} {resp.text}")
+    candidates = [collection]
+    if collection != "sentinel-2-l2a":
+        candidates.append("sentinel-2-l2a")
 
-    return resp.json().get("features", [])
+    last_error = None
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for collection_name in candidates:
+            body = {
+                "collections": [collection_name],
+                "bbox": bbox,
+                "datetime": f"{date_from}/{date_to}",
+                "limit": limit,
+                "query": {"eo:cloud_cover": {"lt": max_cloud_cover}},
+            }
+            resp = await client.post(
+                f"{settings.copernicus_catalog_url}/search",
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("features", [])
+
+            text = resp.text
+            last_error = f"Catalog search failed: {resp.status_code} {text}"
+            if "CollectionInQuerryDoesNotExist" in text:
+                continue
+            break
+
+    raise RuntimeError(last_error or "Catalog search failed for all collection aliases.")

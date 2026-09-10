@@ -8,6 +8,8 @@ query parsing + metadata constraints instead of pretending a generic model
 understands image content.
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from geoalchemy2.shape import to_shape
 from sqlalchemy import or_, select
@@ -85,15 +87,20 @@ async def index_scene_endpoint(scene_id: uuid.UUID, db: AsyncSession = Depends(g
         result = await index_scene(db, scene)
     except ValueError as exc:
         raise HTTPException(409, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
     return result
 
 
 @router.post("/search/semantic", response_model=list[SimilarSceneOut])
 async def semantic_search_endpoint(payload: SemanticSearchRequest, db: AsyncSession = Depends(get_db)):
-    results = await semantic_search(
-        db, payload.query, payload.k, str(payload.aoi_id) if payload.aoi_id else None
-    )
-    return results
+    try:
+        results = await semantic_search(
+            db, payload.query, payload.k, str(payload.aoi_id) if payload.aoi_id else None
+        )
+        return results
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
 
 
 @router.post("/scenes/{scene_id}/similar", response_model=list[SimilarSceneOut])

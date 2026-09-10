@@ -18,6 +18,23 @@ from apps.api.services.vector_index import get_scene_index
 from ml.models.remote_clip import get_remote_clip
 
 
+def require_trained_remote_clip(clip) -> None:
+    """Refuse fake semantic search when the RemoteCLIP checkpoint is not staged.
+
+    The repository must not silently return `weights_loaded=False` results as if
+    those were real semantic retrievals. This guard turns that accidental mode
+    into an explicit runtime error until a real checkpoint is placed at the
+    configured `REMOTE_CLIP_WEIGHTS_PATH`.
+    """
+    if not getattr(clip, "weights_loaded", False):
+        raise RuntimeError(
+            "RemoteCLIP checkpoint not found at "
+            f"{settings.remote_clip_weights_path}. "
+            "Semantic search requires a trained weights file; random-init embeddings "
+            "are not real semantic retrieval."
+        )
+
+
 def _clip():
     return get_remote_clip(weights_path=settings.remote_clip_weights_path)
 
@@ -30,10 +47,12 @@ async def index_scene(db: AsyncSession, scene: Scene) -> dict:
     if not scene.local_path:
         raise ValueError("Scene has no downloaded raster to embed.")
 
+    clip = _clip()
+    require_trained_remote_clip(clip)
+
     png_bytes = render_rgb_preview(scene.local_path, max_size=224)
     image = Image.open(io.BytesIO(png_bytes)).convert("RGB")
 
-    clip = _clip()
     embedding = clip.embed_image(image).numpy()
     _index().add(str(scene.id), embedding)
 
@@ -49,6 +68,8 @@ async def index_scene(db: AsyncSession, scene: Scene) -> dict:
 
 async def semantic_search(db: AsyncSession, query: str, k: int, aoi_id: str | None) -> list[dict]:
     clip = _clip()
+    require_trained_remote_clip(clip)
+
     query_embedding = clip.embed_text(query).numpy()
     matches = _index().search(query_embedding, k=k * 3 if aoi_id else k)
 
