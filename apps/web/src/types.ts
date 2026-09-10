@@ -98,3 +98,76 @@ export interface SimilarScene {
   similarity: number;
   weights_loaded: boolean;
 }
+
+export interface LocationPreset {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  category: string;
+  icon: string;
+  description: string;
+  typical_change: string;
+  default_before: string;
+  default_after: string;
+}
+
+export interface ChangeReportIndicator {
+  name: string;
+  before_mean: number;
+  after_mean: number;
+  delta: number;
+  delta_pct: number;
+  interpretation: string;
+}
+
+export interface ChangeReport {
+  has_significant_change: boolean;
+  change_category: string;
+  change_summary: string;
+  change_area_m2: number;
+  change_area_pct: number;
+  total_area_m2: number;
+  heatmap_url?: string | null;
+  confidence_explanation: string;
+  indicators: ChangeReportIndicator[];
+}
+
+export interface PinAndFetchPayload {
+  name?: string;
+  latitude: number;
+  longitude: number;
+  time_preset?: string;
+  before_datetime?: string;
+  after_datetime?: string;
+  change_type_hint?: string;
+  analysis_radius_km?: number;
+}
+
+export interface PinAndFetchResult {
+  aoi_id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  analysis_radius_km?: number;
+  before_scene: {
+    id: string;
+    product_id: string;
+    acquisition_time: string;
+    sensor: string;
+    cloud_cover: number;
+    preview_url: string;
+  };
+  after_scene: {
+    id: string;
+    product_id: string;
+    acquisition_time: string;
+    sensor: string;
+    cloud_cover: number;
+    preview_url: string;
+  };
+  time_span_days: number;
+  change_report?: ChangeReport;
+  change_events: ChangeEvent[];
+}
+

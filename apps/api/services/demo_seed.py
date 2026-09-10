@@ -31,6 +31,7 @@ from apps.api.services.quality import assess_raster
 from apps.api.services.embeddings import index_scene
 from apps.api.services.change_detection import detect_change
 from apps.api.services.temporal import run_temporal_analysis
+from apps.api.services.satellite_fetcher import fetch_and_write_satellite_raster
 
 DEMO_CRS = "EPSG:32644"  # UTM zone 44N — plausible Sentinel-2 L2A CRS, meters
 PIXEL_SIZE_M = 10.0
@@ -140,7 +141,8 @@ async def seed_demo_data(db: AsyncSession) -> dict:
         date_str = acquisition_time.strftime("%Y%m%d")
         product_id = f"S2A_MSIL2A_{date_str}T103200_T44QKF_KORBA_{i:02d}"
         raster_path = demo_dir / f"{product_id}.tif"
-        _write_synthetic_raster(raster_path, base_terrain, intensity, rng)
+        time_period = "before" if i == 0 else "after"
+        fetch_and_write_satellite_raster(raster_path, 22.5724, 82.9562, time_period=time_period)
 
         scene = Scene(
             id=uuid.uuid4(),

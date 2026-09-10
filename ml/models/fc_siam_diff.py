@@ -74,12 +74,20 @@ class FCSiamDiff(nn.Module):
         bottleneck_diff = torch.abs(bb - ab)
 
         x = self.up4(bottleneck_diff)
+        if x.shape[2:] != d4.shape[2:]:
+            x = torch.nn.functional.interpolate(x, size=d4.shape[2:], mode="bilinear", align_corners=False)
         x = self.dec4(torch.cat([x, d4], dim=1))
         x = self.up3(x)
+        if x.shape[2:] != d3.shape[2:]:
+            x = torch.nn.functional.interpolate(x, size=d3.shape[2:], mode="bilinear", align_corners=False)
         x = self.dec3(torch.cat([x, d3], dim=1))
         x = self.up2(x)
+        if x.shape[2:] != d2.shape[2:]:
+            x = torch.nn.functional.interpolate(x, size=d2.shape[2:], mode="bilinear", align_corners=False)
         x = self.dec2(torch.cat([x, d2], dim=1))
         x = self.up1(x)
+        if x.shape[2:] != d1.shape[2:]:
+            x = torch.nn.functional.interpolate(x, size=d1.shape[2:], mode="bilinear", align_corners=False)
         x = self.dec1(torch.cat([x, d1], dim=1))
 
         return self.head(x)  # logits, shape (B, num_classes, H, W)

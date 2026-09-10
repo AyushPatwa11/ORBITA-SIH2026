@@ -19,6 +19,10 @@ interface Props {
   selectedAoi?: AOI | null;
   selectedEvent?: ChangeEvent | null;
   onSelectEvent?: (event: ChangeEvent) => void;
+  pinMode?: boolean;
+  pinnedCoord?: [number, number] | null;
+  onMapPin?: (coord: [number, number]) => void;
+  analysisRadiusKm?: number;
 }
 
 function getPolygonBounds(coordinates: number[][][]): [[number, number], [number, number]] | null {
@@ -53,11 +57,15 @@ export function MapView({
   selectedAoi,
   selectedEvent,
   onSelectEvent,
+  pinMode,
+  pinnedCoord,
+  onMapPin,
+  analysisRadiusKm = 1.5,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const drawStateRef = useRef<{ first: [number, number] | null }>({ first: null });
-  const popupRef = useRef<maplibregl.Popup | null>(null);
+  const pinMarkerRef = useRef<maplibregl.Marker | null>(null);
   const offlineMode = useOfflineMode();
 
   const [coords, setCoords] = useState<{ lng: number; lat: number; zoom: number }>({
@@ -72,7 +80,7 @@ export function MapView({
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: offlineMode ? OFFLINE_STYLE : LIVE_STYLE,
-      center: [82.95, 22.57], // Centered around Korba demo area
+      center: [82.95, 22.57],
       zoom: 11,
     });
 
@@ -94,43 +102,180 @@ export function MapView({
     };
   }, [offlineMode === null]);
 
-  // Click-to-draw bbox handler
+  // Click handler: supports Pin Mode and Draw BBox Mode
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const handleClick = (e: maplibregl.MapMouseEvent) => {
-      if (!drawingEnabled) return;
-      const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+    if (drawingEnabled) {
+      map.getCanvas().style.cursor = "crosshair";
+    } else if (onMapPin) {
+      map.getCanvas().style.cursor = "pointer";
+    } else {
+      map.getCanvas().style.cursor = "";
+    }
 
-      if (!drawStateRef.current.first) {
-        drawStateRef.current.first = lngLat;
+    const handleClick = (e: maplibregl.MapMouseEvent) => {
+      if (drawingEnabled) {
+        const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+        if (!drawStateRef.current.first) {
+          drawStateRef.current.first = lngLat;
+          return;
+        }
+
+        const [x1, y1] = drawStateRef.current.first;
+        const [x2, y2] = lngLat;
+        const polygon: GeoJSONPolygon = {
+          type: "Polygon",
+          coordinates: [
+            [
+              [Math.min(x1, x2), Math.min(y1, y2)],
+              [Math.max(x1, x2), Math.min(y1, y2)],
+              [Math.max(x1, x2), Math.max(y1, y2)],
+              [Math.min(x1, x2), Math.max(y1, y2)],
+              [Math.min(x1, x2), Math.min(y1, y2)],
+            ],
+          ],
+        };
+        drawStateRef.current.first = null;
+        onBBoxDrawn(polygon);
         return;
       }
 
-      const [x1, y1] = drawStateRef.current.first;
-      const [x2, y2] = lngLat;
-      const polygon: GeoJSONPolygon = {
-        type: "Polygon",
-        coordinates: [
-          [
-            [Math.min(x1, x2), Math.min(y1, y2)],
-            [Math.max(x1, x2), Math.min(y1, y2)],
-            [Math.max(x1, x2), Math.max(y1, y2)],
-            [Math.min(x1, x2), Math.max(y1, y2)],
-            [Math.min(x1, x2), Math.min(y1, y2)],
-          ],
-        ],
-      };
-      drawStateRef.current.first = null;
-      onBBoxDrawn(polygon);
+      if (onMapPin) {
+        onMapPin([e.lngLat.lng, e.lngLat.lat]);
+      }
     };
 
     map.on("click", handleClick);
     return () => {
       map.off("click", handleClick);
     };
-  }, [drawingEnabled, onBBoxDrawn]);
+  }, [pinMode, drawingEnabled, onMapPin, onBBoxDrawn]);
+
+  // Pinned location marker and street-level zoom
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (pinnedCoord) {
+      if (!pinMarkerRef.current) {
+        const el = document.createElement("div");
+        el.innerHTML = `
+          <div style="position:relative;display:flex;align-items:center;justify-content:center;">
+            <div style="position:absolute;width:38px;height:38px;border-radius:50%;background:rgba(0,210,255,0.3);animation:pulseGreen 1.5s infinite;"></div>
+            <div style="width:26px;height:26px;background:#00d2ff;border:2px solid #ffffff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 0 14px #00d2ff;">
+              🎯
+            </div>
+          </div>
+        `;
+        pinMarkerRef.current = new maplibregl.Marker({ element: el })
+          .setLngLat(pinnedCoord)
+          .addTo(map);
+      } else {
+        pinMarkerRef.current.setLngLat(pinnedCoord);
+      }
+
+      const r = analysisRadiusKm || 1.5;
+      let zoomLevel = 15;
+      if (r <= 0.4) zoomLevel = 16.5;
+      else if (r <= 0.8) zoomLevel = 16;
+      else if (r <= 1.5) zoomLevel = 15;
+      else if (r <= 3.0) zoomLevel = 14;
+      else zoomLevel = 13;
+
+      map.flyTo({ center: pinnedCoord, zoom: zoomLevel, duration: 1200 });
+    } else if (pinMarkerRef.current) {
+      pinMarkerRef.current.remove();
+      pinMarkerRef.current = null;
+    }
+  }, [pinnedCoord, analysisRadiusKm]);
+
+  // Render dynamic Detection Area overlay around pinnedCoord
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const sourceId = "detection-area-source";
+    const fillId = "detection-area-fill";
+    const lineId = "detection-area-line";
+
+    const updateDetectionBox = () => {
+      if (!pinnedCoord) {
+        if (map.getSource(sourceId)) {
+          if (map.getLayer(fillId)) map.removeLayer(fillId);
+          if (map.getLayer(lineId)) map.removeLayer(lineId);
+          map.removeSource(sourceId);
+        }
+        return;
+      }
+
+      const [lng, lat] = pinnedCoord;
+      const r = analysisRadiusKm || 1.5;
+      const deltaLat = r / 111.0;
+      const deltaLng = r / (111.0 * Math.max(0.1, Math.cos((lat * Math.PI) / 180.0)));
+      const minLng = lng - deltaLng;
+      const maxLng = lng + deltaLng;
+      const minLat = lat - deltaLat;
+      const maxLat = lat + deltaLat;
+
+      const data: any = {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [minLng, minLat],
+                  [maxLng, minLat],
+                  [maxLng, maxLat],
+                  [minLng, maxLat],
+                  [minLng, minLat],
+                ],
+              ],
+            },
+            properties: {
+              radius_km: r,
+            },
+          },
+        ],
+      };
+
+      const existingSource = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+      if (existingSource) {
+        existingSource.setData(data);
+        return;
+      }
+
+      map.addSource(sourceId, { type: "geojson", data });
+
+      map.addLayer({
+        id: fillId,
+        type: "fill",
+        source: sourceId,
+        paint: {
+          "fill-color": "#00d2ff",
+          "fill-opacity": 0.14,
+        },
+      });
+
+      map.addLayer({
+        id: lineId,
+        type: "line",
+        source: sourceId,
+        paint: {
+          "line-color": "#00d2ff",
+          "line-width": 2,
+          "line-dasharray": [3, 2],
+        },
+      });
+    };
+
+    if (map.isStyleLoaded()) updateDetectionBox();
+    else map.once("load", updateDetectionBox);
+  }, [pinnedCoord, analysisRadiusKm]);
 
   // Render AOI polygons
   useEffect(() => {
@@ -230,7 +375,6 @@ export function MapView({
 
       map.addSource(sourceId, { type: "geojson", data: geojson });
 
-      // Change polygon fill
       map.addLayer({
         id: "change-events-fill",
         type: "fill",
@@ -250,7 +394,6 @@ export function MapView({
         },
       });
 
-      // Change polygon glow border
       map.addLayer({
         id: "change-events-line",
         type: "line",
@@ -270,7 +413,6 @@ export function MapView({
         },
       });
 
-      // Click on change polygon to select
       map.on("click", "change-events-fill", (e) => {
         if (!e.features || !e.features.length) return;
         const clickedId = e.features[0].properties?.id;
@@ -292,7 +434,7 @@ export function MapView({
     else map.once("load", renderEvents);
   }, [changeEvents, selectedEvent, onSelectEvent]);
 
-  // Fly to selected AOI or initial AOIs
+  // Fly to selected AOI, Event, or Initial AOI
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -313,42 +455,95 @@ export function MapView({
       }
     }
 
-    // Otherwise if we have AOIs but nothing selected, fit to first AOI
-    if (aois.length > 0 && aois[0].geometry) {
+    if (aois.length > 0 && aois[0].geometry && !pinnedCoord) {
       const bounds = getPolygonBounds(aois[0].geometry.coordinates);
       if (bounds) {
         map.fitBounds(bounds, { padding: 50, maxZoom: 13, duration: 800 });
       }
     }
-  }, [selectedAoi, selectedEvent, aois]);
+  }, [selectedAoi, selectedEvent, aois, pinnedCoord]);
 
   return (
     <div className="map-container">
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
 
-      {/* Drawing helper banner */}
-      {drawingEnabled && (
+      {/* Pin Mode Indicator Banner */}
+      {pinMode && (
         <div
           style={{
             position: "absolute",
             top: 14,
             left: 14,
-            background: "rgba(16, 22, 35, 0.9)",
-            backdropFilter: "blur(8px)",
-            border: "1px solid var(--accent)",
-            boxShadow: "0 0 16px var(--accent-glow)",
+            background: "rgba(10, 14, 23, 0.92)",
+            backdropFilter: "blur(10px)",
+            border: "1px solid #00d2ff",
+            boxShadow: "0 0 16px rgba(0, 210, 255, 0.3)",
             borderRadius: 8,
             padding: "8px 14px",
             fontSize: 12,
-            color: "var(--text-hi)",
+            color: "#ffffff",
             display: "flex",
             alignItems: "center",
             gap: 8,
-            zIndex: 10,
+            zIndex: 15,
           }}
         >
           <span className="pulse-dot" />
-          Click two diagonal points on the map to define the AOI bounding box
+          <strong>Pin Mode Active:</strong> Click anywhere on the map to set surveillance location
+        </div>
+      )}
+
+      {/* Drawing BBox Banner */}
+      {drawingEnabled && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(10, 14, 23, 0.9)",
+            backdropFilter: "blur(10px)",
+            border: "1px solid var(--accent)",
+            borderRadius: 20,
+            padding: "6px 14px",
+            fontSize: 11,
+            color: "var(--accent)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            zIndex: 15,
+          }}
+        >
+          <span className="pulse-dot" />
+          Click two diagonal corners on the map to define observation boundary
+        </div>
+      )}
+
+      {onMapPin && !drawingEnabled && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(10, 14, 23, 0.88)",
+            backdropFilter: "blur(10px)",
+            border: "1px solid rgba(0, 210, 255, 0.35)",
+            borderRadius: 20,
+            padding: "5px 14px",
+            fontSize: 11,
+            fontWeight: 500,
+            color: "#00d2ff",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            zIndex: 15,
+            pointerEvents: "none",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+          }}
+        >
+          <span>🎯</span>
+          <span>Click anywhere on the map to pin any location</span>
         </div>
       )}
 
@@ -375,7 +570,7 @@ export function MapView({
         <span>LAT: {coords.lat}° N</span>
         <span>LNG: {coords.lng}° E</span>
         <span>ZOOM: {coords.zoom}x</span>
-        <span>CRS: EPSG:4326</span>
+        <span>CRS: WGS84</span>
       </div>
     </div>
   );

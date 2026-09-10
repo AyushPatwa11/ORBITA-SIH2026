@@ -28,7 +28,7 @@ from rasterio.features import geometry_mask
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.models import ChangeEvent, ChangeObservation, Scene
+from apps.api.models import ChangeEvent, ChangeObservation, QualityReport, Scene
 from apps.api.services.alignment import align_pair
 from ml.inference.change_inference import CHANGE_PROB_THRESHOLD, load_model
 
@@ -81,7 +81,9 @@ async def build_timeline(db: AsyncSession, event: ChangeEvent, baseline: Scene) 
 
     timeline: list[TimelinePoint] = []
     for scene in candidates:
-        quality_status = scene.quality_report.status if scene.quality_report else "UNKNOWN"
+        qr_res = await db.execute(select(QualityReport).where(QualityReport.scene_id == scene.id))
+        qr = qr_res.scalar_one_or_none()
+        quality_status = qr.status if qr else "UNKNOWN"
         if quality_status == "UNUSABLE" or not scene.local_path:
             timeline.append(
                 TimelinePoint(scene.id, scene.acquisition_time, quality_status, None, "EXCLUDED")

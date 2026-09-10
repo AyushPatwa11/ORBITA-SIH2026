@@ -5,6 +5,9 @@ import type {
   DownloadTriggerResult,
   GeoJSONPolygon,
   IngestionTriggerResult,
+  LocationPreset,
+  PinAndFetchPayload,
+  PinAndFetchResult,
   Scene,
   SearchFilters,
   SimilarScene,
@@ -89,4 +92,19 @@ export const api = {
       `/scenes/${sceneId}/index`,
       { method: "POST" }
     ),
+
+  getPresetLocations: () => request<LocationPreset[]>("/location/presets"),
+
+  geocodeAddress: (query: string) =>
+    request<Array<{ display_name: string; latitude: number; longitude: number; type: string }>>(
+      `/location/geocode?q=${encodeURIComponent(query)}`
+    ),
+
+  pinAndFetchLocation: (payload: PinAndFetchPayload) =>
+    request<PinAndFetchResult>("/location/pin-and-fetch", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  changeHeatmapUrl: (aoiId: string) => `${BASE}/location/change-heatmap/${aoiId}`,
 };

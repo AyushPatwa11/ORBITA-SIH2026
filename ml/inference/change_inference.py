@@ -81,4 +81,33 @@ def run_change_inference(
                     )
                 )
 
+    if len(objects) == 0 and valid_mask.sum() > 50:
+        # Remote sensing spectral change detection baseline (Euclidean band reflectance shift)
+        n_b = min(3, before.shape[0], after.shape[0])
+        diff = np.sqrt(np.mean((after[:n_b] - before[:n_b]) ** 2, axis=0))
+        diff = np.where(valid_mask, diff, 0.0)
+        p90 = float(np.percentile(diff[valid_mask], 90)) if valid_mask.sum() > 50 else 0.5
+        threshold = max(0.15, min(0.35, p90 * 0.90))
+        spec_mask = (diff >= threshold).astype(np.uint8)
+        spec_mask = ndimage.binary_opening(spec_mask, structure=np.ones((3, 3))).astype(np.uint8)
+
+        labeled, n = ndimage.label(spec_mask)
+        for label_id in range(1, n + 1):
+            region = labeled == label_id
+            pixel_count = int(region.sum())
+            if pixel_count < MIN_CHANGE_OBJECT_PIXELS:
+                continue
+            mean_val = float(diff[region].mean())
+            norm_prob = min(0.95, max(0.45, mean_val * 2.0))
+
+            for geom, val in raster_shapes(region.astype(np.uint8), mask=region, transform=transform):
+                if val == 1:
+                    objects.append(
+                        ChangeObject(
+                            geometry_wkt=shapely_shape(geom).wkt,
+                            pixel_area=pixel_count,
+                            mean_probability=round(norm_prob, 3),
+                        )
+                    )
+
     return prob, objects

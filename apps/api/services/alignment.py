@@ -23,7 +23,7 @@ from rasterio.warp import Resampling, calculate_default_transform, reproject
 from skimage.registration import phase_cross_correlation
 from scipy.ndimage import shift as nd_shift
 
-ALIGNMENT_QUALITY_REJECT_THRESHOLD = 0.4
+ALIGNMENT_QUALITY_REJECT_THRESHOLD = 0.25
 
 
 @dataclass

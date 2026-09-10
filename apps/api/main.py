@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.core.config import settings
 from apps.api.core.db import init_db
-from apps.api.routers import aois, change_events, demo, scenes, search
+from apps.api.routers import aois, change_events, demo, location, scenes, search
 
 
 @asynccontextmanager
@@ -36,6 +36,7 @@ app.include_router(scenes.router)
 app.include_router(change_events.router)
 app.include_router(demo.router)
 app.include_router(search.router)
+app.include_router(location.router)
 
 
 @app.get("/health")
