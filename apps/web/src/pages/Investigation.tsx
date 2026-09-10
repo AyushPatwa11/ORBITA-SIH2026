@@ -854,7 +854,7 @@ Inspection Pass (T1): ${afterDate}
           <>
             {/* Header with Export Action */}
             <div className="section-title">
-              <span>Change Intelligence & Evidence Report</span>
+              <span>Before vs After Satellite Imagery</span>
               <button
                 className="secondary"
                 style={{ padding: "2px 6px", fontSize: 10 }}
@@ -865,9 +865,36 @@ Inspection Pass (T1): ${afterDate}
               </button>
             </div>
 
-            {/* 1. AI CHANGE INTELLIGENCE REPORT */}
+            {/* TOP RIGHT: Before vs After Satellite Photos */}
+            <BeforeAfterSwipe
+              beforeUrl={
+                selected?.supporting_observations.find((o) => o.role === "before")
+                  ? api.scenePreviewUrl(
+                      selected.supporting_observations.find((o) => o.role === "before")!.scene_id
+                    )
+                  : beforeId
+                  ? api.scenePreviewUrl(beforeId)
+                  : null
+              }
+              afterUrl={
+                selected?.supporting_observations.find((o) => o.role === "after")
+                  ? api.scenePreviewUrl(
+                      selected.supporting_observations.find((o) => o.role === "after")!.scene_id
+                    )
+                  : afterId
+                  ? api.scenePreviewUrl(afterId)
+                  : null
+              }
+              beforeDate={beforeDateStr}
+              afterDate={afterDateStr}
+            />
+
+            {/* BELOW IMAGERY: AI Change Intelligence Report */}
             {changeReport && (
-              <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div className="section-title" style={{ marginTop: 4 }}>
+                  <span>AI Change Intelligence Report</span>
+                </div>
                 {/* Executive Status Box */}
                 <div
                   style={{
@@ -1347,34 +1374,6 @@ Inspection Pass (T1): ${afterDate}
                 )}
               </>
             )}
-
-            {/* 7. EVIDENCE SATELLITE PHOTOS AT THE BOTTOM */}
-            <div className="section-title" style={{ marginTop: 18 }}>
-              <span>Before vs After Satellite Imagery (Evidence Photos)</span>
-            </div>
-
-            <BeforeAfterSwipe
-              beforeUrl={
-                selected?.supporting_observations.find((o) => o.role === "before")
-                  ? api.scenePreviewUrl(
-                      selected.supporting_observations.find((o) => o.role === "before")!.scene_id
-                    )
-                  : beforeId
-                  ? api.scenePreviewUrl(beforeId)
-                  : null
-              }
-              afterUrl={
-                selected?.supporting_observations.find((o) => o.role === "after")
-                  ? api.scenePreviewUrl(
-                      selected.supporting_observations.find((o) => o.role === "after")!.scene_id
-                    )
-                  : afterId
-                  ? api.scenePreviewUrl(afterId)
-                  : null
-              }
-              beforeDate={beforeDateStr}
-              afterDate={afterDateStr}
-            />
           </>
         )}
       </div>

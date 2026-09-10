@@ -263,6 +263,17 @@ async def pin_and_fetch_location(
     lon_max = lng + delta_lng
     lat_max = lat + delta_lat
 
+    # Scale tile resolution with detection zoom level:
+    # Smaller radius → higher pixel density so imagery stays crisp.
+    if radius_km <= 0.4:
+        tile_size = 1024   # sub-500m: street-level, maximum clarity
+    elif radius_km <= 1.0:
+        tile_size = 768    # ~1 km radius: high-detail neighbourhood
+    elif radius_km <= 2.5:
+        tile_size = 512    # mid-range sector view
+    else:
+        tile_size = 512    # regional/district view — standard
+
     polygon_wkt = (
         f"POLYGON(({lon_min} {lat_min}, {lon_max} {lat_min}, "
         f"{lon_max} {lat_max}, {lon_min} {lat_max}, {lon_min} {lat_min}))"
@@ -296,6 +307,7 @@ async def pin_and_fetch_location(
         target_dt=before_dt,
         change_type=change_type,
         delta=max(delta_lat, delta_lng),
+        tile_size=tile_size,
         force_refresh=True,
     )
 
@@ -328,6 +340,7 @@ async def pin_and_fetch_location(
         target_dt=after_dt,
         change_type=change_type,
         delta=max(delta_lat, delta_lng),
+        tile_size=tile_size,
         force_refresh=True,
     )
 

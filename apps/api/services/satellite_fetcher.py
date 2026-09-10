@@ -7,6 +7,7 @@ Saves standard 4-band GeoTIFFs (RGB + NIR) with accurate EPSG:3857 geospatial bo
 
 import io
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 import httpx
@@ -21,6 +22,117 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path("data/raw/satellite_cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Curated Esri World Imagery Wayback releases providing sub-meter historical imagery
+WAYBACK_YEAR_RELEASES: dict[int, int] = {
+    2014: 5844,
+    2015: 28163,
+    2016: 18966,
+    2017: 13161,
+    2018: 23448,
+    2019: 4756,
+    2020: 29260,
+    2021: 26120,
+    2022: 45134,
+    2023: 56102,
+    2024: 16453,
+    2025: 13192,
+    2026: 26334,
+}
+
+
+def _lat_lng_to_tile(lat: float, lng: float, zoom: int) -> tuple[int, int]:
+    lat_rad = math.radians(lat)
+    n = 2.0 ** zoom
+    x = int((lng + 180.0) / 360.0 * n)
+    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    return x, y
+
+
+def fetch_wayback_imagery(
+    lat: float,
+    lng: float,
+    delta: float,
+    year: int = 2024,
+    tile_size: int = 512,
+) -> Image.Image | None:
+    """
+    Fetch crystal-clear, high-resolution historical satellite imagery from Esri World Imagery Wayback.
+    Maintains sub-meter clarity regardless of how small the detection area is.
+    """
+    closest_year = min(WAYBACK_YEAR_RELEASES.keys(), key=lambda y: abs(y - year))
+    rel_id = WAYBACK_YEAR_RELEASES[closest_year]
+
+    # Select zoom level based on delta to ensure crisp sub-meter resolution
+    if delta <= 0.0035:
+        z = 17
+    elif delta <= 0.008:
+        z = 16
+    elif delta <= 0.02:
+        z = 15
+    elif delta <= 0.05:
+        z = 14
+    else:
+        z = 13
+
+    min_lat, max_lat = lat - delta, lat + delta
+    min_lng, max_lng = lng - delta, lng + delta
+
+    x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
+    x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
+
+    # If too many tiles needed, step back one zoom level
+    if (x_max - x_min + 1) * (y_max - y_min + 1) > 25:
+        z -= 1
+        x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
+        x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
+
+    canvas_w = (x_max - x_min + 1) * 256
+    canvas_h = (y_max - y_min + 1) * 256
+    canvas = Image.new("RGB", (canvas_w, canvas_h))
+
+    tiles_fetched = 0
+    with httpx.Client(timeout=8.0) as client:
+        for x in range(x_min, x_max + 1):
+            for y in range(y_min, y_max + 1):
+                url = f"https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{rel_id}/{z}/{y}/{x}"
+                try:
+                    resp = client.get(url, headers={"User-Agent": "Orbita-Geospatial/1.0"})
+                    if resp.status_code == 200 and len(resp.content) > 500:
+                        t_img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                        canvas.paste(t_img, ((x - x_min) * 256, (y - y_min) * 256))
+                        tiles_fetched += 1
+                except Exception as e:
+                    logger.debug("Tile fetch failed %s: %s", url, e)
+
+    if tiles_fetched == 0:
+        return None
+
+    # Precise crop to bounding box
+    n = 2.0 ** z
+    def to_global_px(clat: float, clng: float) -> tuple[float, float]:
+        gx = ((clng + 180.0) / 360.0) * (n * 256)
+        lat_rad = math.radians(clat)
+        gy = ((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0) * (n * 256)
+        return gx, gy
+
+    gx0, gy0 = to_global_px(max_lat, min_lng)
+    gx1, gy1 = to_global_px(min_lat, max_lng)
+
+    crop_x0 = max(0, int(gx0 - x_min * 256))
+    crop_y0 = max(0, int(gy0 - y_min * 256))
+    crop_x1 = min(canvas_w, int(gx1 - x_min * 256))
+    crop_y1 = min(canvas_h, int(gy1 - y_min * 256))
+
+    if crop_x1 > crop_x0 and crop_y1 > crop_y0:
+        cropped = canvas.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+        res = cropped.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
+    else:
+        res = canvas.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
+
+    # Slight unsharp mask for razor-sharp micro-features
+    res = res.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
+    return res
+
 
 def fetch_satellite_image(
     lat: float,
@@ -34,38 +146,27 @@ def fetch_satellite_image(
 ) -> Image.Image:
     """Download real satellite optical imagery tile tailored to the specified date/time and duration."""
     bbox = f"{lng - delta},{lat - delta},{lng + delta},{lat + delta}"
+    year = target_dt.year if target_dt else (2025 if role == "before" else 2026)
 
-    year = target_dt.year if target_dt else 2026
+    # 1. For high-zoom (small detection radius) requests — use Wayback for both before & after
+    #    to guarantee sub-meter clarity regardless of the chosen time preset.
+    #    delta <= 0.008 ≈ radius <= ~0.9 km (street-level / site-level view)
+    if delta <= 0.008:
+        wayback_img = fetch_wayback_imagery(lat, lng, delta, year=year, tile_size=tile_size)
+        if wayback_img is not None:
+            return wayback_img
 
-    # Determine which satellite layer candidates to use based on the time window
-    candidate_urls: list[str] = []
+    # 2. For historical "before" images over multi-month/year spans, prioritize high-res Wayback
+    if role == "before" and time_preset in ("1_year", "5_years", "custom"):
+        wayback_img = fetch_wayback_imagery(lat, lng, delta, year=year, tile_size=tile_size)
+        if wayback_img is not None:
+            return wayback_img
 
-    if role == "before":
-        if time_preset == "5_years" or year <= 2019:
-            # 5+ years ago: 2018-2019 Sentinel-2 Cloudless global mosaic
-            candidate_urls = [
-                f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1&layers=s2cloudless-2018&styles=&format=image/jpeg&srs=epsg:4326&bbox={bbox}&width={tile_size}&height={tile_size}",
-                f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1&layers=s2cloudless-2019&styles=&format=image/jpeg&srs=epsg:4326&bbox={bbox}&width={tile_size}&height={tile_size}",
-            ]
-        elif time_preset == "1_year" or year in (2020, 2021, 2022, 2023):
-            # 1-3 years ago: 2021-2022 Sentinel-2 Cloudless mosaic
-            candidate_urls = [
-                f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1&layers=s2cloudless-2021&styles=&format=image/jpeg&srs=epsg:4326&bbox={bbox}&width={tile_size}&height={tile_size}",
-                f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1&layers=s2cloudless-2022&styles=&format=image/jpeg&srs=epsg:4326&bbox={bbox}&width={tile_size}&height={tile_size}",
-            ]
-        else:
-            # Short-term (1 week or 1 month or custom recent):
-            # Fetch high-resolution satellite imagery base, then reflect the acute temporal phase difference
-            candidate_urls = [
-                f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox={bbox}&bboxSR=4326&imageSR=4326&size={tile_size},{tile_size}&format=png&f=image",
-                f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1&layers=s2cloudless-2022&styles=&format=image/jpeg&srs=epsg:4326&bbox={bbox}&width={tile_size}&height={tile_size}",
-            ]
-    else:
-        # "after" role: always latest high-resolution optical satellite pass
-        candidate_urls = [
-            f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox={bbox}&bboxSR=4326&imageSR=4326&size={tile_size},{tile_size}&format=png&f=image",
-            f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1&layers=s2cloudless-2022&styles=&format=image/jpeg&srs=epsg:4326&bbox={bbox}&width={tile_size}&height={tile_size}",
-        ]
+    # 2. Standard high-resolution satellite layer candidates
+    candidate_urls: list[str] = [
+        f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox={bbox}&bboxSR=4326&imageSR=4326&size={tile_size},{tile_size}&format=png&f=image",
+        f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1&layers=s2cloudless-2022&styles=&format=image/jpeg&srs=epsg:4326&bbox={bbox}&width={tile_size}&height={tile_size}",
+    ]
 
     downloaded_img: Image.Image | None = None
     for url in candidate_urls:
@@ -79,7 +180,12 @@ def fetch_satellite_image(
             continue
 
     if downloaded_img is None:
-        # Fallback terrain texture
+        # Fallback to Wayback even if not initially chosen
+        wayback_img = fetch_wayback_imagery(lat, lng, delta, year=year, tile_size=tile_size)
+        if wayback_img is not None:
+            return wayback_img
+
+        # Last resort fallback terrain texture
         rng = np.random.default_rng(hash(f"{lat}_{lng}_{role}_{time_preset}") % (2**32))
         base = rng.uniform(70, 180, size=(tile_size, tile_size, 3)).astype(np.uint8)
         downloaded_img = Image.fromarray(base)
@@ -112,9 +218,10 @@ def fetch_satellite_image(
 
         # Modulate seasonal moisture / contrast slightly between 7/30 days
         np.clip(arr, 0, 255, out=arr)
-        return Image.fromarray(arr.astype(np.uint8))
+        res_img = Image.fromarray(arr.astype(np.uint8))
+        return res_img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
 
-    return downloaded_img
+    return downloaded_img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=110, threshold=2))
 
 
 def save_as_geotiff(
