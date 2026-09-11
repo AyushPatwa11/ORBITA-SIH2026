@@ -87,6 +87,12 @@ def _fetch_sentinelhub_image(
 
     # --- Step 2: build Process API request ---
     bbox = [lng - delta, lat - delta, lng + delta, lat + delta]
+    
+    # Sentinel-2 native resolution is 10m/px.
+    # Span in meters is approximately delta * 2 * 111320.
+    span_meters = delta * 2.0 * 111320.0
+    native_px = max(16, min(2500, int(span_meters / 10.0)))
+
     payload = {
         "input": {
             "bounds": {
@@ -108,8 +114,8 @@ def _fetch_sentinelhub_image(
             ],
         },
         "output": {
-            "width": tile_size,
-            "height": tile_size,
+            "width": native_px,
+            "height": native_px,
             "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
         },
         "evalscript": _SH_EVALSCRIPT_TRUE_COLOR,
@@ -221,7 +227,8 @@ def _fetch_wayback_tiles(
     span_deg = max(0.001, delta * 2.0)
     # Calculate optimal zoom to sample ~1024-1400 source pixels across the target AOI
     calculated_z = int(math.ceil(math.log2(max(1.0, 1440.0 / span_deg))))
-    z = max(13, min(18, calculated_z))
+    # Allow zoom up to 23 to get highest resolution available for small areas
+    z = max(13, min(23, calculated_z))
 
     min_lat, max_lat = lat - delta, lat + delta
     min_lng, max_lng = lng - delta, lng + delta
@@ -229,8 +236,8 @@ def _fetch_wayback_tiles(
     x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
     x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
 
-    # Ensure tile count is within reason (e.g. max 36 tiles), fallback zoom if too wide
-    while (x_max - x_min + 1) * (y_max - y_min + 1) > 36 and z > 13:
+    # Ensure tile count is within reason (e.g. max 64 tiles), fallback zoom if too wide
+    while (x_max - x_min + 1) * (y_max - y_min + 1) > 64 and z > 13:
         z -= 1
         x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
         x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
@@ -285,9 +292,9 @@ def _fetch_wayback_tiles(
 
     if crop_x1 > crop_x0 and crop_y1 > crop_y0:
         cropped = canvas.crop((crop_x0, crop_y0, crop_x1, crop_y1))
-        res = cropped.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
+        res = cropped
     else:
-        res = canvas.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
+        res = canvas
 
     res = res.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
     logger.info("✅ Wayback release %s fetched %d tiles at z=%d (high resolution)", release_id, tiles_fetched, z)
@@ -317,10 +324,15 @@ def _fetch_eox_cloudless(
     closest_year = min(_EOX_YEAR_LAYERS.keys(), key=lambda y: abs(y - year))
     layer = _EOX_YEAR_LAYERS[closest_year]
     bbox = f"{lng - delta},{lat - delta},{lng + delta},{lat + delta}"
+    
+    # EOX is Sentinel-2, native resolution ~10m/px.
+    span_meters = delta * 2.0 * 111320.0
+    native_px = max(16, min(2500, int(span_meters / 10.0)))
+    
     url = (
         f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1"
         f"&layers={layer}&styles=&format=image/jpeg&srs=epsg:4326"
-        f"&bbox={bbox}&width={tile_size}&height={tile_size}"
+        f"&bbox={bbox}&width={native_px}&height={native_px}"
     )
     try:
         resp = httpx.get(url, timeout=15.0)

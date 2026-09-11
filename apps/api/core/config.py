@@ -21,12 +21,12 @@ class Settings(BaseSettings):
     copernicus_catalog_url: str = "https://catalogue.dataspace.copernicus.eu/stac"
     copernicus_process_url: str = "https://sh.dataspace.copernicus.eu/api/v1/process"
 
-    data_dir: str = "/data"
-    raw_dir: str = "/data/raw"
-    processed_dir: str = "/data/processed"
-    tile_dir: str = "/data/tiles"
-    index_dir: str = "/data/indexes"
-    remote_clip_weights_path: str = "/data/models/remote_clip_vit_b_32.pt"
+    data_dir: str = "./data"
+    raw_dir: str = "./data/raw"
+    processed_dir: str = "./data/processed"
+    tile_dir: str = "./data/tiles"
+    index_dir: str = "./data/indexes"
+    remote_clip_weights_path: str = "./data/models/remote_clip_vit_b_32.pt"
 
     offline_mode: bool = False
     environment: str = "development"
