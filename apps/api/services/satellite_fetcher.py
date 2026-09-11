@@ -10,6 +10,7 @@ Priority fetch chain:
 Saves standard 4-band GeoTIFFs (RGB + NIR) with EPSG:3857 bounds.
 """
 
+import concurrent.futures
 import io
 import logging
 import math
@@ -55,7 +56,7 @@ def _fetch_sentinelhub_image(
     delta: float,
     date_from: datetime,
     date_to: datetime,
-    tile_size: int = 512,
+    tile_size: int = 1024,
 ) -> Image.Image | None:
     """
     Fetch a real Sentinel-2 L2A true-color image from Sentinel Hub Process API.
@@ -214,19 +215,13 @@ def _fetch_wayback_tiles(
     lng: float,
     delta: float,
     release_id: int,
-    tile_size: int = 512,
+    tile_size: int = 1024,
 ) -> Image.Image | None:
-    """Fetch Esri Wayback tiles for a specific release and assemble a cropped mosaic."""
-    if delta <= 0.0035:
-        z = 17
-    elif delta <= 0.008:
-        z = 16
-    elif delta <= 0.02:
-        z = 15
-    elif delta <= 0.05:
-        z = 14
-    else:
-        z = 13
+    """Fetch Esri Wayback tiles for a specific release and assemble a high-resolution cropped mosaic."""
+    span_deg = max(0.001, delta * 2.0)
+    # Calculate optimal zoom to sample ~1024-1400 source pixels across the target AOI
+    calculated_z = int(math.ceil(math.log2(max(1.0, 1440.0 / span_deg))))
+    z = max(13, min(18, calculated_z))
 
     min_lat, max_lat = lat - delta, lat + delta
     min_lng, max_lng = lng - delta, lng + delta
@@ -234,7 +229,8 @@ def _fetch_wayback_tiles(
     x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
     x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
 
-    if (x_max - x_min + 1) * (y_max - y_min + 1) > 25:
+    # Ensure tile count is within reason (e.g. max 36 tiles), fallback zoom if too wide
+    while (x_max - x_min + 1) * (y_max - y_min + 1) > 36 and z > 13:
         z -= 1
         x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
         x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
@@ -243,22 +239,31 @@ def _fetch_wayback_tiles(
     canvas_h = (y_max - y_min + 1) * 256
     canvas = Image.new("RGB", (canvas_w, canvas_h))
 
+    tile_coords = [(x, y) for x in range(x_min, x_max + 1) for y in range(y_min, y_max + 1)]
+
+    def fetch_one(coord):
+        tx, ty = coord
+        url = (
+            f"https://wayback.maptiles.arcgis.com/arcgis/rest/services/"
+            f"World_Imagery/MapServer/tile/{release_id}/{z}/{ty}/{tx}"
+        )
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(url, headers={"User-Agent": "Orbita-Geospatial/1.0"})
+                if resp.status_code == 200 and len(resp.content) > 500:
+                    t_img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                    return tx, ty, t_img
+        except Exception as e:
+            logger.debug("Wayback tile %s failed: %s", url, e)
+        return tx, ty, None
+
     tiles_fetched = 0
-    with httpx.Client(timeout=8.0) as client:
-        for x in range(x_min, x_max + 1):
-            for y in range(y_min, y_max + 1):
-                url = (
-                    f"https://wayback.maptiles.arcgis.com/arcgis/rest/services/"
-                    f"World_Imagery/MapServer/tile/{release_id}/{z}/{y}/{x}"
-                )
-                try:
-                    resp = client.get(url, headers={"User-Agent": "Orbita-Geospatial/1.0"})
-                    if resp.status_code == 200 and len(resp.content) > 500:
-                        t_img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-                        canvas.paste(t_img, ((x - x_min) * 256, (y - y_min) * 256))
-                        tiles_fetched += 1
-                except Exception as e:
-                    logger.debug("Wayback tile %s failed: %s", url, e)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(fetch_one, tile_coords)
+        for tx, ty, t_img in results:
+            if t_img is not None:
+                canvas.paste(t_img, ((tx - x_min) * 256, (ty - y_min) * 256))
+                tiles_fetched += 1
 
     if tiles_fetched == 0:
         return None
@@ -285,7 +290,7 @@ def _fetch_wayback_tiles(
         res = canvas.resize((tile_size, tile_size), Image.Resampling.LANCZOS)
 
     res = res.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
-    logger.info("✅ Wayback release %s fetched %d tiles at z=%d", release_id, tiles_fetched, z)
+    logger.info("✅ Wayback release %s fetched %d tiles at z=%d (high resolution)", release_id, tiles_fetched, z)
     return res
 
 
@@ -423,7 +428,7 @@ def fetch_satellite_image(
     target_dt: datetime | None = None,
     change_type: str = "DEVELOPMENT / CONSTRUCTION",
     delta: float = 0.015,
-    tile_size: int = 512,
+    tile_size: int = 1024,
 ) -> Image.Image:
     """
     Fetch a real satellite image for the given role (before/after) and date.
@@ -519,7 +524,7 @@ def fetch_and_write_satellite_raster(
     target_dt: datetime | None = None,
     change_type: str = "DEVELOPMENT / CONSTRUCTION",
     delta: float = 0.015,
-    tile_size: int = 512,
+    tile_size: int = 1024,
     force_refresh: bool = False,
 ) -> Path:
     """High-level helper: fetch real satellite imagery for the exact date/span, then write GeoTIFF."""

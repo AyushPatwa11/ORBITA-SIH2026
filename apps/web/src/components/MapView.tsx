@@ -2,6 +2,7 @@ import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { useOfflineMode } from "../App";
 import type { AOI, ChangeEvent, GeoJSONPolygon } from "../types";
+import { Box, Eye, EyeOff, Layers, Locate, Navigation2, Sparkles } from "lucide-react";
 
 const LIVE_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
@@ -23,6 +24,10 @@ interface Props {
   pinnedCoord?: [number, number] | null;
   onMapPin?: (coord: [number, number]) => void;
   analysisRadiusKm?: number;
+  userLocation?: [number, number] | null;
+  heatmapUrl?: string | null;
+  showHeatmapOverlay?: boolean;
+  onToggleHeatmap?: () => void;
 }
 
 function getPolygonBounds(coordinates: number[][][]): [[number, number], [number, number]] | null {
@@ -61,30 +66,49 @@ export function MapView({
   pinnedCoord,
   onMapPin,
   analysisRadiusKm = 1.5,
+  userLocation,
+  heatmapUrl,
+  showHeatmapOverlay = false,
+  onToggleHeatmap,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const drawStateRef = useRef<{ first: [number, number] | null }>({ first: null });
+  const drawStartRef = useRef<[number, number] | null>(null);
   const pinMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const userMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const drawCornerMarkerRef = useRef<maplibregl.Marker | null>(null);
   const offlineMode = useOfflineMode();
 
+  const [is3D, setIs3D] = useState(false);
+  const [drawingActive, setDrawingActive] = useState(false);
+  const [drawMetrics, setDrawMetrics] = useState<{ widthKm: number; heightKm: number; areaHa: number } | null>(null);
+
   const [coords, setCoords] = useState<{ lng: number; lat: number; zoom: number }>({
-    lng: 82.95,
-    lat: 22.57,
-    zoom: 11,
+    lng: 78.96,
+    lat: 20.59,
+    zoom: 5,
   });
 
-  // Initialize map
+  // Initialize Map
   useEffect(() => {
     if (!containerRef.current || offlineMode === null) return;
+
+    const initialCenter: [number, number] = userLocation
+      ? userLocation
+      : pinnedCoord
+      ? pinnedCoord
+      : [78.96, 20.59];
+
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: offlineMode ? OFFLINE_STYLE : LIVE_STYLE,
-      center: [82.95, 22.57],
-      zoom: 11,
+      center: initialCenter,
+      zoom: userLocation ? 13 : pinnedCoord ? 14 : 5,
+      pitch: 0,
+      bearing: 0,
     });
 
-    map.addControl(new maplibregl.NavigationControl({}), "top-right");
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 
     map.on("mousemove", (e) => {
       setCoords({
@@ -102,58 +126,63 @@ export function MapView({
     };
   }, [offlineMode === null]);
 
-  // Click handler: supports Pin Mode and Draw BBox Mode
+  // 3D Tilt & Oblique Camera View Toggle
+  const toggle3D = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const next3D = !is3D;
+    setIs3D(next3D);
+    map.easeTo({
+      pitch: next3D ? 60 : 0,
+      bearing: next3D ? 30 : 0,
+      duration: 1000,
+    });
+  };
+
+  // Fly to user location button
+  const handleFlyToUser = () => {
+    const map = mapRef.current;
+    if (!map || !userLocation) return;
+    map.flyTo({ center: userLocation, zoom: 14, duration: 1200 });
+  };
+
+  // Blinking Live User Location Marker
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    if (drawingEnabled) {
-      map.getCanvas().style.cursor = "crosshair";
-    } else if (onMapPin) {
-      map.getCanvas().style.cursor = "pointer";
-    } else {
-      map.getCanvas().style.cursor = "";
+    if (userLocation) {
+      if (!userMarkerRef.current) {
+        const el = document.createElement("div");
+        el.className = "user-location-marker-container";
+        el.innerHTML = `
+          <div style="position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer;">
+            <div style="position:absolute;width:42px;height:42px;border-radius:50%;background:rgba(16,185,129,0.35);animation:pulseGreen 1.6s infinite ease-out;"></div>
+            <div style="position:absolute;width:26px;height:26px;border-radius:50%;background:rgba(16,185,129,0.6);animation:pulseGreen 1.6s 0.4s infinite ease-out;"></div>
+            <div style="position:relative;width:16px;height:16px;background:#10b981;border:3px solid #ffffff;border-radius:50%;box-shadow:0 0 12px #10b981;"></div>
+          </div>
+        `;
+
+        const popup = new maplibregl.Popup({ offset: 20, closeButton: false }).setHTML(`
+          <div style="padding:4px 6px;font-family:sans-serif;font-size:11px;color:#10b981;font-weight:700;">
+            📍 Your Current Location
+          </div>
+        `);
+
+        userMarkerRef.current = new maplibregl.Marker({ element: el })
+          .setLngLat(userLocation)
+          .setPopup(popup)
+          .addTo(map);
+      } else {
+        userMarkerRef.current.setLngLat(userLocation);
+      }
+    } else if (userMarkerRef.current) {
+      userMarkerRef.current.remove();
+      userMarkerRef.current = null;
     }
+  }, [userLocation]);
 
-    const handleClick = (e: maplibregl.MapMouseEvent) => {
-      if (drawingEnabled) {
-        const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-        if (!drawStateRef.current.first) {
-          drawStateRef.current.first = lngLat;
-          return;
-        }
-
-        const [x1, y1] = drawStateRef.current.first;
-        const [x2, y2] = lngLat;
-        const polygon: GeoJSONPolygon = {
-          type: "Polygon",
-          coordinates: [
-            [
-              [Math.min(x1, x2), Math.min(y1, y2)],
-              [Math.max(x1, x2), Math.min(y1, y2)],
-              [Math.max(x1, x2), Math.max(y1, y2)],
-              [Math.min(x1, x2), Math.max(y1, y2)],
-              [Math.min(x1, x2), Math.min(y1, y2)],
-            ],
-          ],
-        };
-        drawStateRef.current.first = null;
-        onBBoxDrawn(polygon);
-        return;
-      }
-
-      if (onMapPin) {
-        onMapPin([e.lngLat.lng, e.lngLat.lat]);
-      }
-    };
-
-    map.on("click", handleClick);
-    return () => {
-      map.off("click", handleClick);
-    };
-  }, [pinMode, drawingEnabled, onMapPin, onBBoxDrawn]);
-
-  // Pinned location marker and street-level zoom
+  // Pinned Location Marker
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -163,8 +192,8 @@ export function MapView({
         const el = document.createElement("div");
         el.innerHTML = `
           <div style="position:relative;display:flex;align-items:center;justify-content:center;">
-            <div style="position:absolute;width:38px;height:38px;border-radius:50%;background:rgba(0,210,255,0.3);animation:pulseGreen 1.5s infinite;"></div>
-            <div style="width:26px;height:26px;background:#00d2ff;border:2px solid #ffffff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 0 14px #00d2ff;">
+            <div style="position:absolute;width:40px;height:40px;border-radius:50%;background:rgba(0,210,255,0.3);animation:pulseGreen 1.5s infinite;"></div>
+            <div style="width:28px;height:28px;background:#00d2ff;border:2px solid #ffffff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 0 16px #00d2ff;color:#05070c;font-weight:bold;">
               🎯
             </div>
           </div>
@@ -191,7 +220,190 @@ export function MapView({
     }
   }, [pinnedCoord, analysisRadiusKm]);
 
-  // Render dynamic Detection Area overlay around pinnedCoord
+  // Working Interactive Box Drawing Engine
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const sourceId = "interactive-draw-source";
+    const fillId = "interactive-draw-fill";
+    const lineId = "interactive-draw-line";
+
+    const setupDrawSource = () => {
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+
+        map.addLayer({
+          id: fillId,
+          type: "fill",
+          source: sourceId,
+          paint: {
+            "fill-color": "#38bdf8",
+            "fill-opacity": 0.22,
+          },
+        });
+
+        map.addLayer({
+          id: lineId,
+          type: "line",
+          source: sourceId,
+          paint: {
+            "line-color": "#38bdf8",
+            "line-width": 2.5,
+            "line-dasharray": [2, 2],
+          },
+        });
+      }
+    };
+
+    if (map.isStyleLoaded()) setupDrawSource();
+    else map.once("load", setupDrawSource);
+
+    // Cursor update
+    if (drawingEnabled) {
+      map.getCanvas().style.cursor = "crosshair";
+    } else if (onMapPin) {
+      map.getCanvas().style.cursor = "pointer";
+    } else {
+      map.getCanvas().style.cursor = "";
+    }
+
+    const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
+      if (!drawingEnabled || !drawStartRef.current) return;
+
+      const [x1, y1] = drawStartRef.current;
+      const x2 = e.lngLat.lng;
+      const y2 = e.lngLat.lat;
+
+      const minX = Math.min(x1, x2);
+      const maxX = Math.max(x1, x2);
+      const minY = Math.min(y1, y2);
+      const maxY = Math.max(y1, y2);
+
+      // Calculate area metrics
+      const deltaLat = (maxY - minY) * 111.0;
+      const deltaLng = (maxX - minX) * (111.0 * Math.cos(((y1 + y2) / 2 * Math.PI) / 180.0));
+      const areaM2 = deltaLat * 1000 * deltaLng * 1000;
+      setDrawMetrics({
+        widthKm: Math.round(deltaLng * 10) / 10,
+        heightKm: Math.round(deltaLat * 10) / 10,
+        areaHa: Math.round(areaM2 / 10000),
+      });
+
+      const data: any = {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [minX, minY],
+                  [maxX, minY],
+                  [maxX, maxY],
+                  [minX, maxY],
+                  [minX, minY],
+                ],
+              ],
+            },
+          },
+        ],
+      };
+
+      const src = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+      if (src) src.setData(data);
+    };
+
+    const handleClick = (e: maplibregl.MapMouseEvent) => {
+      if (drawingEnabled) {
+        const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+        // First corner click
+        if (!drawStartRef.current) {
+          drawStartRef.current = lngLat;
+          setDrawingActive(true);
+
+          // Add temporary corner pin marker
+          const el = document.createElement("div");
+          el.innerHTML = `
+            <div style="width:14px;height:14px;background:#38bdf8;border:2px solid #ffffff;border-radius:50%;box-shadow:0 0 10px #38bdf8;"></div>
+          `;
+          drawCornerMarkerRef.current = new maplibregl.Marker({ element: el })
+            .setLngLat(lngLat)
+            .addTo(map);
+          return;
+        }
+
+        // Second corner click: complete bounding box
+        const [x1, y1] = drawStartRef.current;
+        const [x2, y2] = lngLat;
+
+        const polygon: GeoJSONPolygon = {
+          type: "Polygon",
+          coordinates: [
+            [
+              [Math.min(x1, x2), Math.min(y1, y2)],
+              [Math.max(x1, x2), Math.min(y1, y2)],
+              [Math.max(x1, x2), Math.max(y1, y2)],
+              [Math.min(x1, x2), Math.max(y1, y2)],
+              [Math.min(x1, x2), Math.min(y1, y2)],
+            ],
+          ],
+        };
+
+        // Reset draw state
+        drawStartRef.current = null;
+        setDrawingActive(false);
+        setDrawMetrics(null);
+        if (drawCornerMarkerRef.current) {
+          drawCornerMarkerRef.current.remove();
+          drawCornerMarkerRef.current = null;
+        }
+
+        const src = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+        if (src) src.setData({ type: "FeatureCollection", features: [] });
+
+        onBBoxDrawn(polygon);
+        return;
+      }
+
+      if (onMapPin) {
+        onMapPin([e.lngLat.lng, e.lngLat.lat]);
+      }
+    };
+
+    map.on("mousemove", handleMouseMove);
+    map.on("click", handleClick);
+
+    return () => {
+      map.off("mousemove", handleMouseMove);
+      map.off("click", handleClick);
+    };
+  }, [drawingEnabled, onMapPin, onBBoxDrawn]);
+
+  // Clean up draw markers if drawing is cancelled
+  useEffect(() => {
+    if (!drawingEnabled) {
+      drawStartRef.current = null;
+      setDrawingActive(false);
+      setDrawMetrics(null);
+      if (drawCornerMarkerRef.current) {
+        drawCornerMarkerRef.current.remove();
+        drawCornerMarkerRef.current = null;
+      }
+      const map = mapRef.current;
+      if (map) {
+        const src = map.getSource("interactive-draw-source") as maplibregl.GeoJSONSource | undefined;
+        if (src) src.setData({ type: "FeatureCollection", features: [] });
+      }
+    }
+  }, [drawingEnabled]);
+
+  // Render Detection Area Bounding Polygon around pinnedCoord
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -257,7 +469,7 @@ export function MapView({
         source: sourceId,
         paint: {
           "fill-color": "#00d2ff",
-          "fill-opacity": 0.14,
+          "fill-opacity": 0.12,
         },
       });
 
@@ -277,12 +489,12 @@ export function MapView({
     else map.once("load", updateDetectionBox);
   }, [pinnedCoord, analysisRadiusKm]);
 
-  // Render AOI polygons
+  // Render AOI Polygons
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const render = () => {
+    const renderAois = () => {
       const sourceId = "aois-source";
       const geojson: any = {
         type: "FeatureCollection",
@@ -318,7 +530,7 @@ export function MapView({
             "#00d2ff",
             "#0284c7",
           ],
-          "fill-opacity": 0.12,
+          "fill-opacity": 0.14,
         },
       });
 
@@ -339,11 +551,11 @@ export function MapView({
       });
     };
 
-    if (map.isStyleLoaded()) render();
-    else map.once("load", render);
+    if (map.isStyleLoaded()) renderAois();
+    else map.once("load", renderAois);
   }, [aois, selectedAoi]);
 
-  // Render Change Event Polygons & Markers
+  // Render Change Event Footprints with Category Color Coding
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -360,7 +572,7 @@ export function MapView({
             properties: {
               id: e.id,
               change_type: e.change_type,
-              confidence: (e.confidence * 100).toFixed(0) + "%",
+              confidence: Math.round(e.confidence * 100) + "%",
               category: e.evidence_category,
               isSelected: selectedEvent?.id === e.id,
             },
@@ -390,7 +602,7 @@ export function MapView({
             "#f43f5e",
             "#00d2ff",
           ],
-          "fill-opacity": 0.35,
+          "fill-opacity": 0.38,
         },
       });
 
@@ -409,7 +621,7 @@ export function MapView({
             "#f59e0b",
             "#f43f5e",
           ],
-          "line-width": ["case", ["==", ["get", "isSelected"], true], 3, 2],
+          "line-width": ["case", ["==", ["get", "isSelected"], true], 3.5, 2],
         },
       });
 
@@ -434,53 +646,134 @@ export function MapView({
     else map.once("load", renderEvents);
   }, [changeEvents, selectedEvent, onSelectEvent]);
 
-  // Fly to selected AOI, Event, or Initial AOI
+  // Fit bounds when selected AOI or Event changes
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    if (selectedAoi && selectedAoi.geometry) {
-      const bounds = getPolygonBounds(selectedAoi.geometry.coordinates);
-      if (bounds) {
-        map.fitBounds(bounds, { padding: 60, maxZoom: 14, duration: 1200 });
-        return;
-      }
-    }
-
     if (selectedEvent && selectedEvent.geometry) {
       const bounds = getPolygonBounds(selectedEvent.geometry.coordinates);
       if (bounds) {
-        map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 1200 });
+        map.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: 1000 });
         return;
       }
     }
 
-    if (aois.length > 0 && aois[0].geometry && !pinnedCoord) {
+    if (selectedAoi && selectedAoi.geometry) {
+      const bounds = getPolygonBounds(selectedAoi.geometry.coordinates);
+      if (bounds) {
+        map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 1000 });
+        return;
+      }
+    }
+
+    if (aois.length > 0 && aois[0].geometry && !pinnedCoord && !userLocation) {
       const bounds = getPolygonBounds(aois[0].geometry.coordinates);
       if (bounds) {
         map.fitBounds(bounds, { padding: 50, maxZoom: 13, duration: 800 });
       }
     }
-  }, [selectedAoi, selectedEvent, aois, pinnedCoord]);
+  }, [selectedAoi, selectedEvent, aois, pinnedCoord, userLocation]);
 
   return (
     <div className="map-container">
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+
+      {/* 3D & View Control Toolbar (Top-Left) */}
+      <div
+        style={{
+          position: "absolute",
+          top: 12,
+          left: 12,
+          display: "flex",
+          gap: 6,
+          zIndex: 20,
+        }}
+      >
+        <button
+          className={is3D ? "primary" : "secondary"}
+          style={{ padding: "5px 10px", fontSize: 11, background: "rgba(5, 7, 12, 0.88)", backdropFilter: "blur(8px)" }}
+          onClick={toggle3D}
+          title="Toggle 3D Oblique Perspective Angle"
+        >
+          <Navigation2 size={12} style={{ transform: is3D ? "rotate(45deg)" : "none", transition: "transform 0.3s" }} />
+          {is3D ? "3D Perspective" : "2D Top-Down"}
+        </button>
+
+        {userLocation && (
+          <button
+            className="secondary"
+            style={{ padding: "5px 10px", fontSize: 11, background: "rgba(5, 7, 12, 0.88)", backdropFilter: "blur(8px)" }}
+            onClick={handleFlyToUser}
+            title="Recenter map at your current location"
+          >
+            <Locate size={12} color="#10b981" /> Current Location
+          </button>
+        )}
+
+        {heatmapUrl && onToggleHeatmap && (
+          <button
+            className={showHeatmapOverlay ? "primary" : "secondary"}
+            style={{ padding: "5px 10px", fontSize: 11, background: "rgba(5, 7, 12, 0.88)", backdropFilter: "blur(8px)" }}
+            onClick={onToggleHeatmap}
+            title="Toggle Ground Spectral Heatmap Overlay"
+          >
+            {showHeatmapOverlay ? <Eye size={12} /> : <EyeOff size={12} />}
+            Heatmap Layer
+          </button>
+        )}
+      </div>
+
+      {/* Interactive Box Drawing Live Indicator */}
+      {drawingEnabled && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(10, 14, 23, 0.94)",
+            backdropFilter: "blur(12px)",
+            border: "1px solid var(--accent)",
+            boxShadow: "0 0 20px rgba(0, 210, 255, 0.35)",
+            borderRadius: 24,
+            padding: "8px 18px",
+            fontSize: 11.5,
+            color: "#ffffff",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            zIndex: 25,
+          }}
+        >
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#00d2ff", animation: "pulseGreen 1.2s infinite" }} />
+          <span>
+            {drawingActive
+              ? "Drag to opposite diagonal corner and click to finalize boundary"
+              : "Click first corner on map to begin drawing boundary box"}
+          </span>
+          {drawMetrics && (
+            <span style={{ color: "var(--accent)", fontWeight: 700, fontFamily: "var(--mono)", borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
+              {drawMetrics.widthKm} × {drawMetrics.heightKm} km ({drawMetrics.areaHa} ha)
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Pin Mode Indicator Banner */}
       {pinMode && (
         <div
           style={{
             position: "absolute",
-            top: 14,
-            left: 14,
+            top: 50,
+            left: 12,
             background: "rgba(10, 14, 23, 0.92)",
             backdropFilter: "blur(10px)",
             border: "1px solid #00d2ff",
             boxShadow: "0 0 16px rgba(0, 210, 255, 0.3)",
             borderRadius: 8,
-            padding: "8px 14px",
-            fontSize: 12,
+            padding: "7px 12px",
+            fontSize: 11,
             color: "#ffffff",
             display: "flex",
             alignItems: "center",
@@ -489,61 +782,7 @@ export function MapView({
           }}
         >
           <span className="pulse-dot" />
-          <strong>Pin Mode Active:</strong> Click anywhere on the map to set surveillance location
-        </div>
-      )}
-
-      {/* Drawing BBox Banner */}
-      {drawingEnabled && (
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "rgba(10, 14, 23, 0.9)",
-            backdropFilter: "blur(10px)",
-            border: "1px solid var(--accent)",
-            borderRadius: 20,
-            padding: "6px 14px",
-            fontSize: 11,
-            color: "var(--accent)",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            zIndex: 15,
-          }}
-        >
-          <span className="pulse-dot" />
-          Click two diagonal corners on the map to define observation boundary
-        </div>
-      )}
-
-      {onMapPin && !drawingEnabled && (
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "rgba(10, 14, 23, 0.88)",
-            backdropFilter: "blur(10px)",
-            border: "1px solid rgba(0, 210, 255, 0.35)",
-            borderRadius: 20,
-            padding: "5px 14px",
-            fontSize: 11,
-            fontWeight: 500,
-            color: "#00d2ff",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            zIndex: 15,
-            pointerEvents: "none",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
-          }}
-        >
-          <span>🎯</span>
-          <span>Click anywhere on the map to pin any location</span>
+          <strong>Pin Mode Active:</strong> Click anywhere on the map to place surveillance target
         </div>
       )}
 
@@ -553,11 +792,11 @@ export function MapView({
           position: "absolute",
           bottom: 12,
           left: 12,
-          background: "rgba(10, 14, 23, 0.8)",
+          background: "rgba(10, 14, 23, 0.85)",
           backdropFilter: "blur(10px)",
           border: "1px solid var(--border)",
           borderRadius: 6,
-          padding: "4px 10px",
+          padding: "5px 12px",
           fontSize: 10.5,
           fontFamily: "var(--mono)",
           color: "var(--text-low)",
@@ -570,6 +809,7 @@ export function MapView({
         <span>LAT: {coords.lat}° N</span>
         <span>LNG: {coords.lng}° E</span>
         <span>ZOOM: {coords.zoom}x</span>
+        <span>{is3D ? "3D PITCH: 60°" : "2D FLAT"}</span>
         <span>CRS: WGS84</span>
       </div>
     </div>

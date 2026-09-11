@@ -1,11 +1,10 @@
 import {
   Compass,
   Crosshair,
+  Globe2,
   Layers,
-  RefreshCw,
   Satellite,
   Sparkles,
-  Zap,
 } from "lucide-react";
 import { createContext, useContext, useEffect, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -22,7 +21,6 @@ export default function App() {
   const [offlineMode, setOfflineMode] = useState<boolean | null>(null);
   const [aoiCount, setAoiCount] = useState<number>(0);
   const [eventCount, setEventCount] = useState<number>(0);
-  const [seeding, setSeeding] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const isLanding = location.pathname === "/";
@@ -43,19 +41,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  async function handleTopSeed() {
-    setSeeding(true);
-    try {
-      const res = await api.seedDemo();
-      refreshStats();
-      navigate(`/investigate?aoi=${res.aoi_id}`);
-    } catch (err) {
-      alert("Seed failed: " + String(err));
-    } finally {
-      setSeeding(false);
-    }
-  }
-
   return (
     <OfflineModeContext.Provider value={offlineMode}>
       <div className="app-shell">
@@ -67,7 +52,7 @@ export default function App() {
               </div>
               <div className="brand-text">
                 <h2>ORBITA</h2>
-                <small>EO Change Intelligence · SIH26227</small>
+                <small>Earth Observation Intelligence</small>
               </div>
             </NavLink>
 
@@ -82,36 +67,30 @@ export default function App() {
                 <Crosshair size={14} /> Investigation
               </NavLink>
               <NavLink to="/search" className={({ isActive }) => (isActive ? "active" : "")}>
-                <Sparkles size={14} /> Semantic AI Search
+                <Sparkles size={14} /> Semantic AI
               </NavLink>
             </nav>
           </div>
 
           <div className="topbar-right">
             <button
-              className="seed-btn-top"
-              onClick={handleTopSeed}
-              disabled={seeding}
-              title="Inject synthetic multispectral scenes and trigger automatic change detection"
+              className="primary"
+              style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600 }}
+              onClick={() => navigate("/investigate")}
             >
-              {seeding ? (
-                <RefreshCw size={13} className="spin" />
-              ) : (
-                <Zap size={13} fill="#ffffff" />
-              )}
-              {seeding ? "Injecting Data…" : "Inject Demo Data"}
+              <Crosshair size={12} /> New Scan
             </button>
 
             <div className="telemetry-item">
               <span className="pulse-dot"></span>
-              <span>{aoiCount} AOIs · {eventCount} Changes</span>
+              <span>{aoiCount} Sectors · {eventCount} Changes</span>
             </div>
 
             <div className="telemetry-item" style={{ letterSpacing: "0.04em" }}>
               {offlineMode === null
-                ? "CONNECTING…"
+                ? "INITIALIZING…"
                 : offlineMode
-                ? "AIR-GAPPED"
+                ? "AIR-GAPPED SOVEREIGN"
                 : "LIVE TELEMETRY"}
             </div>
           </div>
@@ -129,4 +108,3 @@ export default function App() {
     </OfflineModeContext.Provider>
   );
 }
-

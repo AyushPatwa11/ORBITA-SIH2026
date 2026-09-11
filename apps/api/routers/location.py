@@ -1,7 +1,9 @@
+import asyncio
 import os
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import rasterio
@@ -21,6 +23,7 @@ from apps.api.services.change_detection import detect_change
 from apps.api.services.change_analyzer import analyze_change as run_change_analysis
 from apps.api.services.embeddings import index_scene
 from apps.api.services.quality import assess_raster
+from apps.api.services.ai_agent import analyze_geospatial_changes, answer_agent_question
 from geoalchemy2.shape import to_shape
 from apps.api.services.satellite_fetcher import fetch_and_write_satellite_raster
 
@@ -263,16 +266,8 @@ async def pin_and_fetch_location(
     lon_max = lng + delta_lng
     lat_max = lat + delta_lat
 
-    # Scale tile resolution with detection zoom level:
-    # Smaller radius → higher pixel density so imagery stays crisp.
-    if radius_km <= 0.4:
-        tile_size = 1024   # sub-500m: street-level, maximum clarity
-    elif radius_km <= 1.0:
-        tile_size = 768    # ~1 km radius: high-detail neighbourhood
-    elif radius_km <= 2.5:
-        tile_size = 512    # mid-range sector view
-    else:
-        tile_size = 512    # regional/district view — standard
+    # High-definition sampling across all radii to preserve micro-detail
+    tile_size = 1024
 
     polygon_wkt = (
         f"POLYGON(({lon_min} {lat_min}, {lon_max} {lat_min}, "
@@ -290,25 +285,48 @@ async def pin_and_fetch_location(
     db.add(aoi)
     await db.flush()
 
-    # Generate real optical satellite GeoTIFF rasters for Before & After
+    # Generate real optical satellite GeoTIFF rasters for Before & After in parallel
     demo_dir = Path(settings.raw_dir) / "demo"
     demo_dir.mkdir(parents=True, exist_ok=True)
 
-    # Before raster (tailored to before_dt and time_preset)
     b_date_str = before_dt.strftime("%Y%m%d")
     b_product_id = f"S2A_MSIL2A_{b_date_str}T103200_{aoi.id.hex[:6]}_BASE_{payload.time_preset}"
     b_raster_path = demo_dir / f"{b_product_id}.tif"
-    fetch_and_write_satellite_raster(
-        b_raster_path,
-        lat,
-        lng,
-        role="before",
-        time_preset=payload.time_preset,
-        target_dt=before_dt,
-        change_type=change_type,
-        delta=max(delta_lat, delta_lng),
-        tile_size=tile_size,
-        force_refresh=True,
+
+    a_date_str = after_dt.strftime("%Y%m%d")
+    a_product_id = f"S2A_MSIL2A_{a_date_str}T103200_{aoi.id.hex[:6]}_LATEST_{payload.time_preset}"
+    a_raster_path = demo_dir / f"{a_product_id}.tif"
+
+    delta_deg = max(delta_lat, delta_lng)
+
+    # Concurrent parallel fetch to cut retrieval latency in half
+    await asyncio.gather(
+        asyncio.to_thread(
+            fetch_and_write_satellite_raster,
+            b_raster_path,
+            lat,
+            lng,
+            role="before",
+            time_preset=payload.time_preset,
+            target_dt=before_dt,
+            change_type=change_type,
+            delta=delta_deg,
+            tile_size=tile_size,
+            force_refresh=True,
+        ),
+        asyncio.to_thread(
+            fetch_and_write_satellite_raster,
+            a_raster_path,
+            lat,
+            lng,
+            role="after",
+            time_preset=payload.time_preset,
+            target_dt=after_dt,
+            change_type=change_type,
+            delta=delta_deg,
+            tile_size=tile_size,
+            force_refresh=True,
+        ),
     )
 
     before_scene = Scene(
@@ -326,23 +344,6 @@ async def pin_and_fetch_location(
         ingestion_state="INDEXED",
     )
     db.add(before_scene)
-
-    # After raster (tailored to after_dt and time_preset)
-    a_date_str = after_dt.strftime("%Y%m%d")
-    a_product_id = f"S2A_MSIL2A_{a_date_str}T103200_{aoi.id.hex[:6]}_LATEST_{payload.time_preset}"
-    a_raster_path = demo_dir / f"{a_product_id}.tif"
-    fetch_and_write_satellite_raster(
-        a_raster_path,
-        lat,
-        lng,
-        role="after",
-        time_preset=payload.time_preset,
-        target_dt=after_dt,
-        change_type=change_type,
-        delta=max(delta_lat, delta_lng),
-        tile_size=tile_size,
-        force_refresh=True,
-    )
 
     after_scene = Scene(
         id=uuid.uuid4(),
@@ -390,7 +391,7 @@ async def pin_and_fetch_location(
             before_path=str(b_raster_path),
             after_path=str(a_raster_path),
             aoi_id=str(aoi.id),
-            delta_deg=max(delta_lat, delta_lng),
+            delta_deg=delta_deg,
             gsd_meters=10.0,
             time_span_desc=time_desc,
         )
@@ -429,6 +430,41 @@ async def pin_and_fetch_location(
             "confidence_explanation": "",
             "indicators": [],
         }
+
+    # Synthesize with AI Geospatial Intelligence Agent
+    ai_agent_report = None
+    try:
+        agent_res = analyze_geospatial_changes(
+            location_name=payload.name if payload.name != "Surveillance Location" else aoi.name,
+            lat=lat,
+            lng=lng,
+            radius_km=radius_km,
+            before_dt=before_dt,
+            after_dt=after_dt,
+            change_category=change_report.get("change_category", "Unknown"),
+            change_area_m2=change_report.get("change_area_m2", 0.0),
+            change_area_pct=change_report.get("change_area_pct", 0.0),
+            total_area_m2=change_report.get("total_area_m2", 0.0),
+            indicators=change_report.get("indicators", []),
+            sensor_name="Copernicus Sentinel-2 L2A",
+        )
+        ai_agent_report = {
+            "headline": agent_res.headline,
+            "executive_summary": agent_res.executive_summary,
+            "what_changed": agent_res.what_changed,
+            "where_changed": agent_res.where_changed,
+            "significance_scale": agent_res.significance_scale,
+            "activity_type": agent_res.activity_type,
+            "confidence_level": agent_res.confidence_level,
+            "confidence_score": agent_res.confidence_score,
+            "altered_area_ha": agent_res.altered_area_ha,
+            "altered_area_pct": agent_res.altered_area_pct,
+            "empirical_evidence": agent_res.empirical_evidence,
+            "key_findings": agent_res.key_findings,
+            "recommended_actions": agent_res.recommended_actions,
+        }
+    except Exception as exc:
+        logger_error = str(exc)
 
     def _event_out(e: ChangeEvent) -> dict:
         geom = to_shape(e.geometry) if e.geometry is not None else None
@@ -473,6 +509,7 @@ async def pin_and_fetch_location(
         },
         "time_span_days": time_span_days,
         "change_report": change_report,
+        "ai_agent_report": ai_agent_report,
         "change_events": [_event_out(e) for e in events],
     }
 
@@ -484,3 +521,65 @@ async def get_change_heatmap(aoi_id: str):
     if not heatmap_path.exists():
         raise HTTPException(404, "Heatmap not found for this AOI.")
     return FileResponse(str(heatmap_path), media_type="image/png")
+
+
+class AIQueryRequest(BaseModel):
+    question: str
+    location_name: str = "Surveillance Sector"
+    latitude: float
+    longitude: float
+    analysis_radius_km: float = 1.5
+    before_datetime: str | None = None
+    after_datetime: str | None = None
+    change_category: str = "Surface Modification"
+    change_area_m2: float = 0.0
+    change_area_pct: float = 0.0
+    total_area_m2: float = 0.0
+    indicators: list[dict[str, Any]] = []
+
+
+@router.post("/ai-query")
+async def ask_ai_agent(payload: AIQueryRequest):
+    """Interactive natural language Q&A endpoint answered by the AI Geospatial Agent."""
+    now = datetime(2026, 9, 10, 10, 32, 0)
+    try:
+        b_dt = datetime.fromisoformat(payload.before_datetime) if payload.before_datetime else now - timedelta(days=365)
+        a_dt = datetime.fromisoformat(payload.after_datetime) if payload.after_datetime else now
+    except Exception:
+        b_dt = now - timedelta(days=365)
+        a_dt = now
+
+    days = abs((a_dt - b_dt).days)
+    time_span = f"{days} days"
+
+    report = analyze_geospatial_changes(
+        location_name=payload.location_name,
+        lat=payload.latitude,
+        lng=payload.longitude,
+        radius_km=payload.analysis_radius_km,
+        before_dt=b_dt,
+        after_dt=a_dt,
+        change_category=payload.change_category,
+        change_area_m2=payload.change_area_m2,
+        change_area_pct=payload.change_area_pct,
+        total_area_m2=payload.total_area_m2,
+        indicators=payload.indicators,
+    )
+
+    answer = answer_agent_question(
+        question=payload.question,
+        report=report,
+        location_name=payload.location_name,
+        time_span_desc=time_span,
+    )
+
+    return {
+        "question": payload.question,
+        "answer": answer,
+        "headline": report.headline,
+        "activity_type": report.activity_type,
+        "confidence_level": report.confidence_level,
+        "confidence_score": report.confidence_score,
+        "key_findings": report.key_findings,
+        "recommended_actions": report.recommended_actions,
+    }

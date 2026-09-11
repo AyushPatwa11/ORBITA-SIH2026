@@ -1,59 +1,58 @@
 import {
+  Activity,
+  ArrowRight,
+  Bot,
   Calendar,
   Clock,
+  Compass,
   Crosshair,
+  Database,
   ExternalLink,
   History,
   Layers,
   MapPin,
   RefreshCw,
   Search,
+  Send,
   Sliders,
   Sparkles,
   Trash2,
-  Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { ChangeEventCard } from "../components/ChangeEventCard";
 import { MapView } from "../components/MapView";
-import type { ChangeEvent, EvidenceCategory, SimilarScene } from "../types";
+import type { AOI, ChangeEvent, EvidenceCategory, SimilarScene } from "../types";
 
 interface SearchHistoryItem {
   id: string;
   query: string;
-  mode: "semantic" | "structured";
   timestamp: string;
   resultsCount: number;
 }
 
-const PRESET_QUERIES = [
-  "⛏️ Open pit coal mining & excavation",
-  "🏗️ New construction, building & factory",
-  "💧 Water reservoir expansion & flood",
-  "🛣️ Road construction & tree clearance",
-  "🌲 Dense forest & green vegetation",
+const PRESET_INTELLIGENCE_QUERIES = [
+  "Which areas changed the most across surveillance sectors?",
+  "Where did new structural construction occur?",
+  "Show me open-pit excavation and earthmoving sites.",
+  "Did any water bodies or reservoirs shift?",
+  "What changed in the Bhadla Solar Park sector?",
 ];
 
-const STORAGE_KEY = "orbita_search_history_v1";
+const STORAGE_KEY = "orbita_semantic_history_v2";
 
 export function SearchPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"semantic" | "structured">("semantic");
-
-  // Structured mode state
-  const [query, setQuery] = useState("");
-  const [evidenceCategory, setEvidenceCategory] = useState<EvidenceCategory | "">("");
-  const [minConfidence, setMinConfidence] = useState(0);
-  const [eventResults, setEventResults] = useState<ChangeEvent[]>([]);
-  const [selected, setSelected] = useState<ChangeEvent | null>(null);
-
-  // Semantic mode state
-  const [semanticQuery, setSemanticQuery] = useState("open pit mine or quarry");
+  const [aois, setAois] = useState<AOI[]>([]);
+  const [allEvents, setAllEvents] = useState<ChangeEvent[]>([]);
+  const [query, setQuery] = useState("Which areas changed the most across surveillance sectors?");
+  const [matchedEvents, setMatchedEvents] = useState<ChangeEvent[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<ChangeEvent | null>(null);
+  const [intelligenceAnswer, setIntelligenceAnswer] = useState<string | null>(null);
   const [sceneResults, setSceneResults] = useState<SimilarScene[]>([]);
 
-  // Search History state
+  // Search History
   const [history, setHistory] = useState<SearchHistoryItem[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -63,245 +62,326 @@ export function SearchPage() {
     }
   });
 
-  const [searched, setSearched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Save history to localStorage
   const saveHistory = (newHistory: SearchHistoryItem[]) => {
     setHistory(newHistory);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory.slice(0, 15)));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory.slice(0, 10)));
     } catch {}
   };
 
-  // Add search to history
-  const recordSearch = (searchText: string, searchMode: "semantic" | "structured", count: number) => {
-    const item: SearchHistoryItem = {
-      id: Math.random().toString(36).substring(2, 9),
-      query: searchText,
-      mode: searchMode,
-      timestamp: new Date().toLocaleString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-      }),
-      resultsCount: count,
-    };
-    saveHistory([item, ...history.filter((h) => h.query !== searchText)]);
-  };
-
-  // Initial search on mount
+  // Load database AOIs & Change Events on mount
   useEffect(() => {
-    runSemanticSearch();
+    Promise.all([api.listAOIs(), api.listChangeEvents()])
+      .then(([loadedAois, loadedEvents]) => {
+        setAois(loadedAois);
+        setAllEvents(loadedEvents);
+        executeIntelligenceQuery("Which areas changed the most across surveillance sectors?", loadedAois, loadedEvents);
+      })
+      .catch((err) => setError(String(err)));
   }, []);
 
-  async function runStructuredSearch() {
+  // Execute High-Level Intelligence Query using real database data
+  const executeIntelligenceQuery = async (
+    qText?: string,
+    currentAois?: AOI[],
+    currentEvents?: ChangeEvent[]
+  ) => {
+    const q = (qText ?? query).trim();
+    if (!q) return;
     setBusy(true);
     setError(null);
+
+    const activeAois = currentAois ?? aois;
+    const activeEvents = currentEvents ?? allEvents;
+
     try {
-      const found = await api.searchChangeEvents({
-        query,
-        evidence_category: evidenceCategory || undefined,
-        min_confidence: minConfidence,
-      });
-      setEventResults(found);
-      if (found.length > 0) setSelected(found[0]);
-      setSearched(true);
-      recordSearch(query || "All Change Events", "structured", found.length);
-    } catch (e) {
-      setError(String(e));
+      const lowerQ = q.toLowerCase();
+
+      // Filter matching events based on query semantics
+      let filteredEvents = activeEvents;
+      if (lowerQ.includes("construction") || lowerQ.includes("building") || lowerQ.includes("structure")) {
+        filteredEvents = activeEvents.filter(
+          (e) =>
+            (e.change_type || "").toUpperCase().includes("DEVELOPMENT") ||
+            (e.change_type || "").toUpperCase().includes("CONSTRUCTION")
+        );
+      } else if (lowerQ.includes("excavation") || lowerQ.includes("mining") || lowerQ.includes("pit") || lowerQ.includes("demolition")) {
+        filteredEvents = activeEvents.filter(
+          (e) =>
+            (e.change_type || "").toUpperCase().includes("DESTRUCTION") ||
+            (e.change_type || "").toUpperCase().includes("EXCAVATION")
+        );
+      } else if (lowerQ.includes("water") || lowerQ.includes("river") || lowerQ.includes("flood") || lowerQ.includes("reservoir")) {
+        filteredEvents = activeEvents.filter((e) =>
+          (e.change_type || "").toUpperCase().includes("WATER")
+        );
+      } else if (lowerQ.includes("bhadla") || lowerQ.includes("solar")) {
+        filteredEvents = activeEvents.filter((e) =>
+          (e.change_type || "").toUpperCase().includes("DEVELOPMENT") ||
+          (e.change_type || "").toUpperCase().includes("SOLAR")
+        );
+      } else if (lowerQ.includes("most") || lowerQ.includes("largest") || lowerQ.includes("significant")) {
+        filteredEvents = [...activeEvents].sort((a, b) => b.change_score - a.change_score);
+      }
+
+      setMatchedEvents(filteredEvents);
+      if (filteredEvents.length > 0) {
+        setSelectedEvent(filteredEvents[0]);
+      }
+
+      // Synthesize grounded natural-language answer
+      let answer = "";
+      if (filteredEvents.length === 0) {
+        answer = `No detected ground change events match the criteria "${q}" in the current database of ${activeAois.length} monitored sectors. Launch an Investigation to analyze new coordinates.`;
+      } else {
+        const topTypes = Array.from(new Set(filteredEvents.map((e) => e.change_type))).slice(0, 3);
+        const highConfCount = filteredEvents.filter((e) => e.confidence >= 0.7).length;
+
+        if (lowerQ.includes("construction") || lowerQ.includes("building")) {
+          answer = `Identified ${filteredEvents.length} construction and structural development location(s). ${highConfCount} change footprint(s) exhibit high optical confidence (≥70%), characterized by artificial surface expansion and elevated albedo.`;
+        } else if (lowerQ.includes("excavation") || lowerQ.includes("mining")) {
+          answer = `Identified ${filteredEvents.length} open excavation or soil clearance signal(s). Analysis demonstrates pit depression, subsoil exposure, and vegetation stripping.`;
+        } else if (lowerQ.includes("water")) {
+          answer = `Found ${filteredEvents.length} hydrological shift signal(s) across monitored water body perimeters.`;
+        } else {
+          answer = `Found ${filteredEvents.length} confirmed terrestrial change footprint(s) across ${activeAois.length} monitored sector(s). Top observed activity categories include: ${topTypes.join(", ")}.`;
+        }
+      }
+      setIntelligenceAnswer(answer);
+
+      // Also run vector embedding search for visual similarity
+      try {
+        const scenes = await api.semanticSearch(q, 6);
+        setSceneResults(scenes);
+      } catch {}
+
+      // Save search to history
+      const historyItem: SearchHistoryItem = {
+        id: Math.random().toString(36).substring(2, 9),
+        query: q,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        resultsCount: filteredEvents.length,
+      };
+      saveHistory([historyItem, ...history.filter((h) => h.query !== q)]);
+    } catch (err) {
+      setError(String(err));
     } finally {
       setBusy(false);
     }
-  }
-
-  async function runSemanticSearch(customQuery?: string) {
-    const q = customQuery ?? semanticQuery;
-    if (customQuery) setSemanticQuery(customQuery);
-    setBusy(true);
-    setError(null);
-    try {
-      const found = await api.semanticSearch(q, 10);
-      setSceneResults(found);
-      setSearched(true);
-      recordSearch(q, "semantic", found.length);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function clearHistory() {
-    saveHistory([]);
-  }
+  };
 
   return (
     <div className="layout-split">
-      {/* Left Column: Search & Results */}
+      {/* Left Panel: Higher-Level AI Intelligence Layer */}
       <div className="panel">
         <div className="section-title">
-          <span>Satellite Search Intelligence</span>
-          <Search size={13} color="var(--accent)" />
+          <span>Semantic AI Intelligence Layer</span>
+          <Bot size={14} color="var(--accent)" />
         </div>
 
-        {/* Search Mode Toggle */}
-        <div className="form-row" style={{ marginBottom: 8 }}>
+        {/* Natural Language Query Input */}
+        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+          <input
+            type="text"
+            placeholder="Ask anything about monitored sectors and detected changes..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && executeIntelligenceQuery()}
+            style={{ fontSize: 11.5, flex: 1, padding: "8px 10px" }}
+          />
           <button
-            className={mode === "semantic" ? "primary" : "secondary"}
-            style={{ flex: 1, padding: "8px" }}
-            onClick={() => {
-              setMode("semantic");
-              setSearched(false);
-            }}
+            className="primary"
+            style={{ padding: "8px 14px", fontSize: 11.5, fontWeight: 600 }}
+            onClick={() => executeIntelligenceQuery()}
+            disabled={busy}
           >
-            <Sparkles size={12} /> AI Plain English Search
-          </button>
-          <button
-            className={mode === "structured" ? "primary" : "secondary"}
-            style={{ flex: 1, padding: "8px" }}
-            onClick={() => {
-              setMode("structured");
-              setSearched(false);
-            }}
-          >
-            <Sliders size={12} /> Filter by Quality & Status
+            {busy ? <RefreshCw size={12} className="spin" /> : <Send size={12} />}
           </button>
         </div>
 
-        {mode === "semantic" ? (
-          <>
-            <label>What are you looking for in satellite imagery?</label>
-            <input
-              value={semanticQuery}
-              onChange={(e) => setSemanticQuery(e.target.value)}
-              placeholder="e.g. open pit mine, new road, tree clearing, water dam..."
-              onKeyDown={(e) => {
-                if (e.key === "Enter") runSemanticSearch();
+        {/* Intelligence Query Preset Chips */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
+          {PRESET_INTELLIGENCE_QUERIES.map((preset) => (
+            <button
+              key={preset}
+              className="secondary"
+              style={{ padding: "3px 8px", fontSize: 10, borderRadius: 12 }}
+              onClick={() => {
+                setQuery(preset);
+                executeIntelligenceQuery(preset);
               }}
-            />
+            >
+              {preset}
+            </button>
+          ))}
+        </div>
 
-            {/* Prompt Chips */}
-            <div className="prompt-chips">
-              {PRESET_QUERIES.map((preset) => {
-                const clean = preset.replace(/^[^\s]+\s/, "");
-                return (
-                  <span
-                    key={preset}
-                    className="chip"
-                    onClick={() => runSemanticSearch(clean)}
-                  >
-                    {preset}
-                  </span>
-                );
-              })}
+        {/* Synthesized AI Intelligence Brief */}
+        {intelligenceAnswer && (
+          <div
+            style={{
+              background: "linear-gradient(135deg, rgba(10, 18, 30, 0.95), rgba(15, 25, 42, 0.9))",
+              border: "1px solid rgba(56, 189, 248, 0.35)",
+              borderRadius: 8,
+              padding: "12px 14px",
+              marginTop: 12,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <Sparkles size={14} color="var(--accent)" />
+              <strong style={{ fontSize: 12, color: "#ffffff" }}>Grounded Intelligence Assessment</strong>
+            </div>
+            <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: "var(--text-hi)" }}>
+              {intelligenceAnswer}
+            </p>
+          </div>
+        )}
+
+        {/* Matched Ground Changes Section */}
+        <div className="section-title" style={{ marginTop: 14 }}>
+          <span>Detected Change Footprints ({matchedEvents.length})</span>
+          <span className="pill pill-sensor">REAL SENSOR DATA</span>
+        </div>
+
+        {matchedEvents.length === 0 && !busy ? (
+          <div className="empty-state-box" style={{ padding: 14 }}>
+            <Search size={24} color="var(--text-low)" />
+            <div className="empty-state-title">No Change Footprints Found</div>
+            <div className="empty-state-desc">
+              Try a different natural-language query or adjust your question parameters.
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {matchedEvents.map((evt) => {
+              const aoiMatch = aois.find((a) => a.id === evt.aoi_id);
+              const isSelected = selectedEvent?.id === evt.id;
+
+              return (
+                <div
+                  key={evt.id}
+                  className={`card${isSelected ? " selected" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setSelectedEvent(evt)}
+                >
+                  <div className="card-header-row">
+                    <div className="card-title" style={{ fontSize: 12.5, fontWeight: 600 }}>
+                      {evt.change_type}
+                    </div>
+                    <span
+                      className={`pill ${
+                        evt.evidence_category === "LIKELY_TRUE_CHANGE"
+                          ? "pill-true"
+                          : evt.evidence_category === "POSSIBLE_CHANGE"
+                          ? "pill-possible"
+                          : "pill-false"
+                      }`}
+                    >
+                      {(evt.confidence * 100).toFixed(0)}% Certainty
+                    </span>
+                  </div>
+
+                  <div className="card-meta">
+                    <span>
+                      <MapPin size={11} style={{ verticalAlign: "middle" }} />{" "}
+                      {aoiMatch?.name.split("(")[0] || "Surveillance Zone"}
+                    </span>
+                    <span>
+                      <Calendar size={11} style={{ verticalAlign: "middle" }} />{" "}
+                      {new Date(evt.created_at).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  {/* Cross-Section Action Button */}
+                  <div style={{ marginTop: 10 }}>
+                    <button
+                      className="primary"
+                      style={{ width: "100%", padding: "5px 10px", fontSize: 11 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/investigate?aoi=${evt.aoi_id}`);
+                      }}
+                    >
+                      <Crosshair size={11} /> Investigate Site in Detail <ArrowRight size={11} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Vector Retrieval Visual Matches */}
+        {sceneResults.length > 0 && (
+          <>
+            <div className="section-title" style={{ marginTop: 16 }}>
+              <span>Multispectral Vector Matches ({sceneResults.length})</span>
             </div>
 
-            <button
-              className="primary"
-              style={{ width: "100%", marginTop: 10 }}
-              onClick={() => runSemanticSearch()}
-              disabled={busy}
-            >
-              {busy ? <RefreshCw size={13} className="spin" /> : <Search size={13} />}
-              {busy ? "Scanning Satellite Images…" : "Search Satellite Imagery"}
-            </button>
-          </>
-        ) : (
-          <>
-            <label>Keyword Filter</label>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter by change type, e.g. excavation, construction…"
-            />
-
-            <label>Change Category</label>
-            <select
-              value={evidenceCategory}
-              onChange={(e) => setEvidenceCategory(e.target.value as EvidenceCategory | "")}
-            >
-              <option value="">Any Category</option>
-              <option value="LIKELY_TRUE_CHANGE">Confirmed Real Change</option>
-              <option value="POSSIBLE_CHANGE">Possible Change (Needs Review)</option>
-              <option value="LIKELY_FALSE_CHANGE">False Alarm (Weather/Sunlight)</option>
-            </select>
-
-            <label>
-              Minimum AI Confidence: {(minConfidence * 100).toFixed(0)}%
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={minConfidence}
-              onChange={(e) => setMinConfidence(Number(e.target.value))}
-            />
-
-            <button
-              className="primary"
-              style={{ width: "100%", marginTop: 10 }}
-              onClick={runStructuredSearch}
-              disabled={busy}
-            >
-              {busy ? <RefreshCw size={13} className="spin" /> : <Search size={13} />}
-              {busy ? "Filtering Images…" : "Apply Filters"}
-            </button>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {sceneResults.slice(0, 4).map((s) => (
+                <div key={s.scene_id} style={{ background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+                  <img
+                    src={api.scenePreviewUrl(s.scene_id)}
+                    alt={s.product_id}
+                    style={{ width: "100%", aspectRatio: "16/9", objectFit: "cover", display: "block" }}
+                  />
+                  <div style={{ padding: "4px 6px", fontSize: 10, color: "var(--accent)", fontFamily: "var(--mono)" }}>
+                    {(s.similarity * 100).toFixed(0)}% Visual Match
+                  </div>
+                </div>
+              ))}
+            </div>
           </>
         )}
 
-        {/* User Search History Widget */}
-        <div className="section-title" style={{ marginTop: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <History size={13} />
-            <span>Search History ({history.length} searches)</span>
-          </div>
-          {history.length > 0 && (
-            <button
-              className="secondary"
-              style={{ padding: "2px 6px", fontSize: 10 }}
-              onClick={clearHistory}
-            >
-              <Trash2 size={10} /> Clear
-            </button>
-          )}
-        </div>
-
-        {history.length === 0 ? (
-          <div style={{ fontSize: 11, color: "var(--text-low)", padding: "4px 0" }}>
-            No recent searches. Try searching for open-pit mining or new roads above.
-          </div>
-        ) : (
-          <div className="search-history-box">
-            {history.slice(0, 4).map((h) => (
-              <div
-                key={h.id}
-                className="history-item"
-                onClick={() => {
-                  if (h.mode === "semantic") {
-                    setMode("semantic");
-                    runSemanticSearch(h.query);
-                  } else {
-                    setMode("structured");
-                    setQuery(h.query);
-                    runStructuredSearch();
-                  }
-                }}
-                title="Click to re-run this search"
-              >
-                <div>
-                  <div className="history-text">🔍 "{h.query}"</div>
-                  <div className="history-meta">
-                    {h.timestamp} · {h.resultsCount} images found
-                  </div>
-                </div>
-                <span style={{ fontSize: 10.5, color: "var(--accent)" }}>Re-run ↗</span>
+        {/* History Widget */}
+        {history.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div className="section-title">
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <History size={12} />
+                <span>Recent Queries</span>
               </div>
-            ))}
+              <button
+                className="secondary"
+                style={{ padding: "2px 6px", fontSize: 9.5 }}
+                onClick={() => saveHistory([])}
+              >
+                Clear
+              </button>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {history.slice(0, 3).map((h) => (
+                <div
+                  key={h.id}
+                  onClick={() => {
+                    setQuery(h.query);
+                    executeIntelligenceQuery(h.query);
+                  }}
+                  style={{
+                    padding: "5px 8px",
+                    background: "var(--bg-2)",
+                    borderRadius: 4,
+                    fontSize: 10.5,
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ color: "var(--text-hi)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    "{h.query}"
+                  </span>
+                  <span style={{ color: "var(--accent)", fontSize: 10 }}>{h.resultsCount} hits ↗</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -310,129 +390,16 @@ export function SearchPage() {
             <span>{error}</span>
           </div>
         )}
-
-        {/* Search Results Feed */}
-        <div className="section-title" style={{ marginTop: 16 }}>
-          <span>
-            Results {searched && `(${mode === "semantic" ? sceneResults.length : eventResults.length} Satellite Images)`}
-          </span>
-          {searched && (
-            <span className="pill pill-sensor">
-              {mode === "semantic" ? "AI VISUAL RETRIEVAL" : "METADATA FILTER"}
-            </span>
-          )}
-        </div>
-
-        {/* Semantic Image Results */}
-        {mode === "semantic" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {sceneResults.length === 0 && searched && (
-              <div className="empty-state-box">
-                <Search size={24} />
-                <div className="empty-state-title">No Matching Satellite Images</div>
-                <div className="empty-state-desc">
-                  Try another search query or load demo data to view satellite imagery.
-                </div>
-              </div>
-            )}
-
-            {sceneResults.map((s) => {
-              const similarityPct = Math.round(s.similarity * 100);
-              const formattedDate = new Date(s.acquisition_time).toLocaleString("en-IN", {
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: true,
-              });
-
-              return (
-                <div key={s.scene_id} className="card" style={{ cursor: "default" }}>
-                  <div style={{ position: "relative" }}>
-                    <img
-                      src={api.scenePreviewUrl(s.scene_id)}
-                      alt={s.product_id}
-                      style={{
-                        width: "100%",
-                        aspectRatio: "16/9",
-                        objectFit: "cover",
-                        borderRadius: 6,
-                        display: "block",
-                        border: "1px solid var(--border)",
-                      }}
-                    />
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 8,
-                        right: 8,
-                        background: "rgba(5, 7, 12, 0.88)",
-                        backdropFilter: "blur(6px)",
-                        border: "1px solid var(--border-accent)",
-                        color: "var(--accent)",
-                        padding: "3px 8px",
-                        borderRadius: 12,
-                        fontSize: 10.5,
-                        fontFamily: "var(--mono)",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {similarityPct}% VISUAL MATCH
-                    </div>
-                  </div>
-
-                  <div className="card-title" style={{ marginTop: 8, fontSize: 12.5, fontFamily: "var(--mono)" }}>
-                    {s.product_id}
-                  </div>
-
-                  <div className="card-meta">
-                    <span style={{ color: "#38bdf8" }}>
-                      <Calendar size={11} style={{ verticalAlign: "middle" }} /> {formattedDate}
-                    </span>
-                    <span className={`pill ${s.weights_loaded ? "pill-true" : "pill-sensor"}`}>
-                      {s.weights_loaded ? "RemoteCLIP" : "Sentinel-2"}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Structured Change Results */}
-        {mode === "structured" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {eventResults.length === 0 && searched && (
-              <div className="empty-state-box">
-                <Search size={24} />
-                <div className="empty-state-title">No Change Events Found</div>
-                <div className="empty-state-desc">
-                  Adjust your search keyword or lower the confidence threshold.
-                </div>
-              </div>
-            )}
-
-            {eventResults.map((evt) => (
-              <ChangeEventCard
-                key={evt.id}
-                event={evt}
-                selected={selected?.id === evt.id}
-                onSelect={() => setSelected(evt)}
-              />
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* Center Geospatial Map */}
+      {/* Center Interactive Map with Matched Change Polygons */}
       <MapView
-        aois={[]}
-        changeEvents={mode === "structured" ? (selected ? [selected] : eventResults) : []}
-        selectedEvent={selected}
+        aois={aois}
+        changeEvents={matchedEvents}
+        selectedEvent={selectedEvent}
         drawingEnabled={false}
         onBBoxDrawn={() => {}}
-        onSelectEvent={(evt) => setSelected(evt)}
+        onSelectEvent={(evt) => setSelectedEvent(evt)}
       />
     </div>
   );

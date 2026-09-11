@@ -76,7 +76,13 @@ export const api = {
       body: JSON.stringify(filters),
     }),
 
-  scenePreviewUrl: (sceneId: string) => `${BASE}/scenes/${sceneId}/preview.png`,
+  scenePreviewUrl: (sceneId: string, options?: { hd?: boolean; mode?: "rgb" | "false_color" | "night" }) => {
+    const params = new URLSearchParams();
+    if (options?.hd) params.set("hd", "true");
+    if (options?.mode && options.mode !== "rgb") params.set("mode", options.mode);
+    const qs = params.toString();
+    return `${BASE}/scenes/${sceneId}/preview.png${qs ? `?${qs}` : ""}`;
+  },
 
   semanticSearch: (query: string, k: number, aoiId?: string) =>
     request<SimilarScene[]>("/search/semantic", {
@@ -102,6 +108,34 @@ export const api = {
 
   pinAndFetchLocation: (payload: PinAndFetchPayload) =>
     request<PinAndFetchResult>("/location/pin-and-fetch", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  askAIAgent: (payload: {
+    question: string;
+    location_name?: string;
+    latitude: number;
+    longitude: number;
+    analysis_radius_km?: number;
+    before_datetime?: string;
+    after_datetime?: string;
+    change_category?: string;
+    change_area_m2?: number;
+    change_area_pct?: number;
+    total_area_m2?: number;
+    indicators?: any[];
+  }) =>
+    request<{
+      question: string;
+      answer: string;
+      headline: string;
+      activity_type: string;
+      confidence_level: string;
+      confidence_score: number;
+      key_findings: string[];
+      recommended_actions: string[];
+    }>("/location/ai-query", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

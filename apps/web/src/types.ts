@@ -144,6 +144,33 @@ export interface PinAndFetchPayload {
   analysis_radius_km?: number;
 }
 
+export interface AIAgentReport {
+  headline: string;
+  executive_summary: string;
+  what_changed: string;
+  where_changed: string;
+  significance_scale: string;
+  activity_type: string;
+  confidence_level: string;
+  confidence_score: number;
+  altered_area_ha: number;
+  altered_area_pct: number;
+  empirical_evidence: string[];
+  key_findings: string[];
+  recommended_actions: string[];
+}
+
+export interface AIQueryResult {
+  question: string;
+  answer: string;
+  headline: string;
+  activity_type: string;
+  confidence_level: string;
+  confidence_score: number;
+  key_findings: string[];
+  recommended_actions: string[];
+}
+
 export interface PinAndFetchResult {
   aoi_id: string;
   name: string;
@@ -168,6 +195,7 @@ export interface PinAndFetchResult {
   };
   time_span_days: number;
   change_report?: ChangeReport;
+  ai_agent_report?: AIAgentReport;
   change_events: ChangeEvent[];
 }
 

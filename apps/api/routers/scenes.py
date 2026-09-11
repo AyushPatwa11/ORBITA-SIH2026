@@ -60,7 +60,12 @@ async def list_scenes(aoi_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/scenes/{scene_id}/preview.png")
-async def scene_preview(scene_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def scene_preview(
+    scene_id: uuid.UUID,
+    hd: bool = False,
+    mode: str = "rgb",
+    db: AsyncSession = Depends(get_db),
+):
     scene = await db.get(Scene, scene_id)
     if not scene:
         raise HTTPException(404, "Scene not found")
@@ -68,7 +73,7 @@ async def scene_preview(scene_id: uuid.UUID, db: AsyncSession = Depends(get_db))
         raise HTTPException(409, "Scene has not been downloaded yet — nothing to render")
 
     try:
-        png_bytes = render_rgb_preview(scene.local_path)
+        png_bytes = render_rgb_preview(scene.local_path, hd=hd, mode=mode)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"Failed to render preview: {exc}")
 

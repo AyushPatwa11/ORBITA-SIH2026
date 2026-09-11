@@ -14,45 +14,78 @@ from PIL import Image, ImageFilter, ImageEnhance
 from rasterio.enums import Resampling
 
 
-def render_rgb_preview(path: str, max_size: int = 768) -> bytes:
-    """Render a crisp RGB preview PNG from a local GeoTIFF raster.
+def render_rgb_preview(
+    path: str,
+    max_size: int = 1536,
+    hd: bool = False,
+    mode: str = "rgb",
+) -> bytes:
+    """Render a crisp, high-resolution preview PNG from a local GeoTIFF raster.
 
-    Uses Lanczos resampling for sub-pixel-accurate downscaling and
-    an unsharp mask pass to preserve micro-feature sharpness at all
-    detection radii.
+    Supports:
+      - Standard True-Color RGB
+      - False Color (NIR / Vegetation & Urban Infrared)
+      - Night / Dark Earth Mode
+      - HD / Full-Resolution Rendering (no downscaling when hd=True)
     """
     with rasterio.open(path) as src:
-        band_count = min(3, src.count)
-        scale = min(1.0, max_size / max(src.width, src.height))
+        total_bands = src.count
+        target_size = 2048 if hd else max_size
+        scale = 1.0 if hd else min(1.0, target_size / max(src.width, src.height))
         out_w = max(1, int(src.width * scale))
         out_h = max(1, int(src.height * scale))
 
+        read_count = min(4, total_bands)
         arr = src.read(
-            indexes=list(range(1, band_count + 1)),
-            out_shape=(band_count, out_h, out_w),
-            resampling=Resampling.lanczos,  # sharper than bilinear
+            indexes=list(range(1, read_count + 1)),
+            out_shape=(read_count, out_h, out_w),
+            resampling=Resampling.lanczos,
         ).astype(np.float32)
 
-    if band_count == 1:
+    if read_count == 1:
         arr = np.repeat(arr, 3, axis=0)
 
+    # Visualization modes mapping
+    if mode == "false_color":
+        # Standard False Color Infrared: Red=NIR, Green=Red, Blue=Green
+        if arr.shape[0] >= 4:
+            nir = arr[3]
+            red = arr[2]
+            green = arr[1]
+        else:
+            # Synthetic NIR approximation
+            nir = np.clip(arr[1] * 1.4 - arr[0] * 0.3, 0.0, 1.0)
+            red = arr[2] if arr.shape[0] >= 3 else arr[0]
+            green = arr[1] if arr.shape[0] >= 2 else arr[0]
+        channels = [nir, red, green]
+    else:
+        # Standard RGB (bands 1=B, 2=G, 3=R or 1=R, 2=G, 3=B)
+        # In our GeoTIFFs, band 0=B, 1=G, 2=R
+        r = arr[2] if arr.shape[0] >= 3 else arr[0]
+        g = arr[1] if arr.shape[0] >= 2 else arr[0]
+        b = arr[0]
+        channels = [r, g, b]
+
     rgb = np.zeros((arr.shape[1], arr.shape[2], 3), dtype=np.uint8)
-    for b in range(3):
-        band = arr[b]
-        # 2-98 percentile stretch to preserve true-color contrast
-        lo, hi = np.percentile(band, [2, 98])
+    for i, ch in enumerate(channels):
+        lo, hi = np.percentile(ch, [1.5, 98.5])
         if hi <= lo:
             hi = lo + 1.0
-        stretched = np.clip((band - lo) / (hi - lo), 0, 1) * 255
-        rgb[:, :, b] = stretched.astype(np.uint8)
+        stretched = np.clip((ch - lo) / (hi - lo), 0, 1) * 255.0
+        rgb[:, :, i] = stretched.astype(np.uint8)
 
     img = Image.fromarray(rgb, mode="RGB")
 
-    # Slight unsharp mask to recover crispness after resampling
-    img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=130, threshold=3))
-
-    # Subtle contrast boost for outdoor satellite imagery
-    img = ImageEnhance.Contrast(img).enhance(1.08)
+    if mode == "night":
+        # Dark Earth night mode: deep dark tones with bright luminous hotspots
+        enhancer = ImageEnhance.Brightness(img)
+        img = enhancer.enhance(0.65)
+        contrast = ImageEnhance.Contrast(img)
+        img = contrast.enhance(1.4)
+    else:
+        # Crisp contrast boost and unsharp mask for pristine edge clarity
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=125, threshold=2))
+        img = ImageEnhance.Contrast(img).enhance(1.08)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=False, compress_level=1)

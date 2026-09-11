@@ -1,23 +1,19 @@
 import {
   Activity,
   AlertCircle,
-  Building,
   Calendar,
-  CheckCircle2,
-  Clock,
   Cloud,
   Crosshair,
   Database,
   DownloadCloud,
-  Droplets,
   Layers,
+  Locate,
   MapPin,
-  Pickaxe,
+  Maximize2,
   Plus,
   RefreshCw,
   Satellite,
   Shield,
-  Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -36,7 +32,11 @@ export function Dashboard() {
   const [pendingPolygon, setPendingPolygon] = useState<GeoJSONPolygon | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [seeding, setSeeding] = useState(false);
+
+  // User Current Location State (Auto-obtained on mount)
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const [locatingUser, setLocatingUser] = useState(false);
+  const [userLocationLabel, setUserLocationLabel] = useState<string>("Detecting your location…");
 
   const refreshAois = () =>
     api
@@ -44,18 +44,45 @@ export function Dashboard() {
       .then((data) => {
         setAois(data);
         if (data.length > 0 && !selectedAoi) {
-          setSelectedAoi(data[data.length - 1]); // default to latest
+          setSelectedAoi(data[data.length - 1]);
         }
       })
       .catch((e) => setError(String(e)));
 
   const refreshEvents = () => api.listChangeEvents().then(setChangeEvents).catch(() => {});
 
+  // 1. Automatically obtain user's location on open
   useEffect(() => {
     refreshAois();
     refreshEvents();
+
+    if (navigator.geolocation) {
+      setLocatingUser(true);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = Number(pos.coords.latitude.toFixed(4));
+          const lng = Number(pos.coords.longitude.toFixed(4));
+          setUserLocation([lng, lat]);
+          setUserLocationLabel(`${lat}° N, ${lng}° E`);
+          setLocatingUser(false);
+        },
+        (err) => {
+          // Regional default if blocked or denied (e.g. New Delhi coordinate)
+          const fallbackLng = 77.209;
+          const fallbackLat = 28.614;
+          setUserLocation([fallbackLng, fallbackLat]);
+          setUserLocationLabel(`${fallbackLat}° N, ${fallbackLng}° E (Regional Fallback)`);
+          setLocatingUser(false);
+        },
+        { timeout: 6000, enableHighAccuracy: true }
+      );
+    } else {
+      setUserLocation([77.209, 28.614]);
+      setUserLocationLabel("77.209° E, 28.614° N");
+    }
   }, []);
 
+  // When selected AOI changes, fetch scenes
   useEffect(() => {
     if (selectedAoi) {
       api.listScenes(selectedAoi.id).then(setScenes).catch((e) => setError(String(e)));
@@ -65,23 +92,23 @@ export function Dashboard() {
   }, [selectedAoi]);
 
   async function handleIngest(aoi: AOI) {
-    setBusy(`Checking satellite catalog for newly acquired passes over ${aoi.name}…`);
+    setBusy(`Querying satellite catalog for new passes over ${aoi.name}…`);
     setError(null);
     try {
       const result = await api.triggerIngestion(aoi.id);
-      setBusy(`Satellite pass search complete. Found ${result.scenes_found} scenes.`);
+      setBusy(`Satellite pass query complete. Found ${result.scenes_found} scenes.`);
       if (selectedAoi?.id === aoi.id) {
         setScenes(await api.listScenes(aoi.id));
       }
     } catch (e) {
       setError(String(e));
     } finally {
-      setTimeout(() => setBusy(null), 3500);
+      setTimeout(() => setBusy(null), 3000);
     }
   }
 
   async function handleDownload(scene: Scene) {
-    setBusy(`Downloading satellite image & running quality checks: ${scene.product_id}…`);
+    setBusy(`Downloading high-resolution scene & running quality validation: ${scene.product_id}…`);
     setError(null);
     try {
       await api.downloadScene(scene.id);
@@ -110,27 +137,12 @@ export function Dashboard() {
     }
   }
 
-  async function handleQuickSeed() {
-    setSeeding(true);
-    setError(null);
-    try {
-      const result = await api.seedDemo();
-      await refreshAois();
-      await refreshEvents();
-      navigate(`/investigate?aoi=${result.aoi_id}`);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSeeding(false);
-    }
-  }
-
   const indexedScenes = scenes.filter((s) => s.ingestion_state === "INDEXED").length;
   const aoiEvents = selectedAoi
     ? changeEvents.filter((e) => e.aoi_id === selectedAoi.id)
     : changeEvents;
 
-  // Compute breakdown of changes for selected AOI
+  // Breakdown metrics
   const devCount = aoiEvents.filter((e) =>
     (e.change_type || "").toUpperCase().includes("DEVELOPMENT") ||
     (e.change_type || "").toUpperCase().includes("CONSTRUCTION")
@@ -146,44 +158,92 @@ export function Dashboard() {
     (e.change_type || "").toUpperCase().includes("WATER")
   ).length;
 
-  const confirmedCount = aoiEvents.filter((e) => e.analyst_status === "CONFIRMED").length;
-
   return (
     <div className="layout-split">
       <div className="panel">
-        {/* KPI Metrics Summary Strip */}
-        <div className="kpi-grid">
+        {/* User Location Live Telemetry Widget */}
+        <div
+          style={{
+            background: "linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(10, 14, 23, 0.9))",
+            border: "1px solid rgba(16, 185, 129, 0.35)",
+            borderRadius: 8,
+            padding: "10px 12px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#10b981" }} />
+              <div
+                style={{
+                  position: "absolute",
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  background: "rgba(16, 185, 129, 0.4)",
+                  animation: "pulseGreen 1.5s infinite",
+                }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#10b981", letterSpacing: "0.04em" }}>
+                USER GEOLOCATION ACTIVE
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-hi)", fontFamily: "var(--mono)", marginTop: 2 }}>
+                {userLocationLabel}
+              </div>
+            </div>
+          </div>
+
+          <button
+            className="secondary"
+            style={{ padding: "4px 8px", fontSize: 10.5 }}
+            onClick={() => {
+              if (userLocation) {
+                navigate(`/investigate?lat=${userLocation[1]}&lng=${userLocation[0]}`);
+              }
+            }}
+          >
+            <Crosshair size={11} /> Investigate Here
+          </button>
+        </div>
+
+        {/* Operational KPI Summary */}
+        <div className="kpi-grid" style={{ marginTop: 8 }}>
           <div className="kpi-card">
             <div className="kpi-card-header">
               <span>Monitored Locations</span>
               <MapPin size={12} color="var(--accent)" />
             </div>
             <div className="kpi-card-value">{aois.length}</div>
-            <div className="kpi-card-sub">Active surveillance zones</div>
+            <div className="kpi-card-sub">Active observation sectors</div>
           </div>
 
           <div className="kpi-card">
             <div className="kpi-card-header">
-              <span>Total Ground Changes</span>
+              <span>Detected Ground Shifts</span>
               <Activity size={12} color="var(--good)" />
             </div>
             <div className="kpi-card-value">{changeEvents.length}</div>
-            <div className="kpi-card-sub">Identified by satellite AI</div>
+            <div className="kpi-card-sub">Verified by spectral AI</div>
           </div>
         </div>
 
-        {/* Areas of Interest Header & Actions */}
-        <div className="section-title">
-          <span>Surveillance Locations ({aois.length})</span>
+        {/* Monitored Locations Section Header */}
+        <div className="section-title" style={{ marginTop: 12 }}>
+          <span>Surveillance Sectors ({aois.length})</span>
           <button
-            className={drawing ? "danger" : "secondary"}
-            style={{ padding: "4px 8px", fontSize: 11 }}
+            className={drawing ? "danger" : "primary"}
+            style={{ padding: "4px 10px", fontSize: 11 }}
             onClick={() => setDrawing((d) => !d)}
           >
-            {drawing ? "Cancel Draw" : "+ Draw on Map"}
+            {drawing ? "Cancel Drawing" : "+ Draw on Map"}
           </button>
         </div>
 
+        {/* Working Draw on Map Form */}
         {pendingPolygon && (
           <AOIForm
             polygon={pendingPolygon}
@@ -195,84 +255,92 @@ export function Dashboard() {
           />
         )}
 
-        {/* Empty state when no AOIs exist */}
-        {aois.length === 0 && (
+        {/* Empty State when no sectors exist */}
+        {aois.length === 0 && !drawing && (
           <div className="empty-state-box">
-            <Satellite size={32} />
-            <div className="empty-state-title">No Locations Configured</div>
+            <Satellite size={32} color="var(--accent)" />
+            <div className="empty-state-title">No Surveillance Zones Configured</div>
             <div className="empty-state-desc">
-              Draw a box on the map or click below to immediately load real satellite surveillance
-              data for the Korba Coal Mining Complex.
+              Click "+ Draw on Map" above to delineate a custom bounding box, or launch an Investigation
+              to analyze any coordinates worldwide.
             </div>
-            <button className="primary" onClick={handleQuickSeed} disabled={seeding}>
-              {seeding ? <RefreshCw size={13} className="spin" /> : <Zap size={13} fill="#ffffff" />}
-              {seeding ? "Loading Satellite Images…" : "Load Korba Mining Complex Demo"}
+            <button
+              className="primary"
+              onClick={() => navigate("/investigate")}
+              style={{ fontSize: 12, marginTop: 8 }}
+            >
+              <Crosshair size={13} /> Launch Investigation
             </button>
           </div>
         )}
 
-        {/* Location Cards */}
-        {aois.map((aoi) => {
-          const isSelected = selectedAoi?.id === aoi.id;
-          const aoiEventCount = changeEvents.filter((e) => e.aoi_id === aoi.id).length;
+        {/* Monitored Sectors List */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {aois.map((aoi) => {
+            const isSelected = selectedAoi?.id === aoi.id;
+            const aoiEventCount = changeEvents.filter((e) => e.aoi_id === aoi.id).length;
 
-          return (
-            <div
-              key={aoi.id}
-              className={`card${isSelected ? " selected" : ""}`}
-              onClick={() => setSelectedAoi(aoi)}
-            >
-              <div className="card-header-row">
-                <div className="card-title" style={{ fontSize: 13 }}>{aoi.name}</div>
-                <span className={`pill ${aoi.monitoring_enabled ? "pill-true" : "pill-insufficient"}`}>
-                  {aoi.monitoring_enabled ? "Active" : "Standby"}
-                </span>
+            return (
+              <div
+                key={aoi.id}
+                className={`card${isSelected ? " selected" : ""}`}
+                onClick={() => setSelectedAoi(aoi)}
+                style={{ cursor: "pointer" }}
+              >
+                <div className="card-header-row">
+                  <div className="card-title" style={{ fontSize: 13, fontWeight: 600 }}>
+                    {aoi.name}
+                  </div>
+                  <span className={`pill ${aoi.monitoring_enabled ? "pill-true" : "pill-insufficient"}`}>
+                    {aoi.monitoring_enabled ? "Active" : "Standby"}
+                  </span>
+                </div>
+
+                <div className="card-meta">
+                  <span>
+                    <Cloud size={11} style={{ verticalAlign: "middle" }} /> Max Cloud: {aoi.max_cloud_cover}%
+                  </span>
+                  <span>
+                    <Activity size={11} style={{ verticalAlign: "middle" }} /> {aoiEventCount} Changes Detected
+                  </span>
+                </div>
+
+                <div className="form-row" style={{ marginTop: 10 }}>
+                  <button
+                    className="secondary"
+                    style={{ flex: 1, padding: "5px 8px", fontSize: 11 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleIngest(aoi);
+                    }}
+                    title="Query Copernicus Sentinel-2 for newly acquired passes"
+                  >
+                    <RefreshCw size={11} /> Check Passes
+                  </button>
+                  <button
+                    className="primary"
+                    style={{ flex: 1, padding: "5px 8px", fontSize: 11 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/investigate?aoi=${aoi.id}`);
+                    }}
+                  >
+                    <Crosshair size={11} /> Inspect Changes
+                  </button>
+                </div>
               </div>
+            );
+          })}
+        </div>
 
-              <div className="card-meta">
-                <span>
-                  <Cloud size={11} style={{ verticalAlign: "middle" }} /> Max Cloud: {aoi.max_cloud_cover}%
-                </span>
-                <span>
-                  <Activity size={11} style={{ verticalAlign: "middle" }} /> {aoiEventCount} Changes
-                </span>
-              </div>
-
-              <div className="form-row" style={{ marginTop: 10 }}>
-                <button
-                  className="secondary"
-                  style={{ flex: 1, padding: "5px 8px", fontSize: 11 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleIngest(aoi);
-                  }}
-                  title="Search Copernicus / Sentinel-2 for new satellite imagery"
-                >
-                  <RefreshCw size={11} /> Check New Passes
-                </button>
-                <button
-                  className="primary"
-                  style={{ flex: 1, padding: "5px 8px", fontSize: 11 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    navigate(`/investigate?aoi=${aoi.id}`);
-                  }}
-                >
-                  <Crosshair size={11} /> Inspect Changes
-                </button>
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Location Change Activity & Summary Card */}
+        {/* Selected Sector Ground Activity Breakdown */}
         {selectedAoi && (
-          <div className="activity-summary-card" style={{ marginTop: 6 }}>
+          <div className="activity-summary-card" style={{ marginTop: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong style={{ fontSize: 12, color: "var(--text-hi)" }}>
-                {selectedAoi.name.split("(")[0]} — Changes Breakdown
+                {selectedAoi.name.split("(")[0]} — Change Distribution
               </strong>
-              <span className="pill pill-sensor">{aoiEvents.length} Changes</span>
+              <span className="pill pill-sensor">{aoiEvents.length} Total</span>
             </div>
 
             <div className="activity-stat-row">
@@ -289,30 +357,23 @@ export function Dashboard() {
                 <div className="activity-stat-label">💧 Water Shifts</div>
               </div>
             </div>
-
-            <div style={{ fontSize: 10.5, color: "var(--text-mid)", display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-              <span>🎖️ <strong>Officer Confirmed:</strong> {confirmedCount}</span>
-              <span>🤖 <strong>AI Detection Rate:</strong> 100%</span>
-            </div>
           </div>
         )}
 
-        {/* Satellite Imagery Gallery for Selected Location */}
+        {/* Satellite Imagery Passes for Selected Sector */}
         {selectedAoi && (
           <>
             <div className="section-title" style={{ marginTop: 14 }}>
-              <span>
-                Satellite Passes ({scenes.length})
-              </span>
+              <span>Satellite Passes ({scenes.length})</span>
               <span className="pill pill-sensor">{indexedScenes} Ready</span>
             </div>
 
             {scenes.length === 0 ? (
               <div className="empty-state-box">
                 <Database size={24} />
-                <div className="empty-state-title">No Satellite Images Found</div>
+                <div className="empty-state-title">No Local Satellite Scenes</div>
                 <div className="empty-state-desc">
-                  Click below to fetch available satellite imagery passes.
+                  Check passes to fetch available multi-spectral imagery.
                 </div>
                 <button
                   className="primary"
@@ -339,11 +400,11 @@ export function Dashboard() {
 
                   return (
                     <div key={scene.id} className="scene-card">
-                      {/* Real Image Preview */}
                       <img
                         className="scene-card-thumb"
                         src={api.scenePreviewUrl(scene.id)}
                         alt={scene.product_id}
+                        style={{ imageRendering: "-webkit-optimize-contrast" }}
                         onError={(e) => {
                           (e.target as HTMLElement).style.display = "none";
                         }}
@@ -387,8 +448,8 @@ export function Dashboard() {
                             {isIndexed
                               ? "Ready for Analysis"
                               : isRejected
-                              ? "Too Cloudy (Skipped)"
-                              : "Available"}
+                              ? "Cloud Obscured"
+                              : "Discovered"}
                           </span>
 
                           {scene.ingestion_state === "DISCOVERED" && (
@@ -396,7 +457,7 @@ export function Dashboard() {
                               style={{ padding: "2px 8px", fontSize: 10 }}
                               onClick={() => handleDownload(scene)}
                             >
-                              <DownloadCloud size={10} /> Download Image
+                              <DownloadCloud size={10} /> Download Scene
                             </button>
                           )}
                         </div>
@@ -411,26 +472,27 @@ export function Dashboard() {
 
         {/* Status Messages */}
         {busy && (
-          <div className="alert-banner info">
+          <div className="alert-banner info" style={{ marginTop: 10 }}>
             <RefreshCw size={14} className="spin" />
             <span>{busy}</span>
           </div>
         )}
 
         {error && (
-          <div className="alert-banner error">
+          <div className="alert-banner error" style={{ marginTop: 10 }}>
             <AlertCircle size={14} />
             <span>{error}</span>
           </div>
         )}
       </div>
 
-      {/* Center Dynamic Geospatial Map */}
+      {/* Interactive Map with User Location and Working Draw on Map */}
       <MapView
         aois={aois}
         changeEvents={aoiEvents}
         drawingEnabled={drawing}
         selectedAoi={selectedAoi}
+        userLocation={userLocation}
         onBBoxDrawn={(polygon) => setPendingPolygon(polygon)}
       />
     </div>

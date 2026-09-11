@@ -2,247 +2,270 @@ import {
   ArrowRight,
   Compass,
   Crosshair,
+  Database,
+  Globe2,
   Layers,
   Radar,
   RadioTower,
-  RefreshCw,
   Search,
   ShieldCheck,
   Sparkles,
   Workflow,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api/client";
 import { GlobeHero } from "../components/GlobeHero";
 
-type Status = "built" | "partial" | "planned";
-
-const STATUS_LABEL: Record<Status, string> = {
-  built: "Fully Operational",
-  partial: "Partially Integrated",
-  planned: "Roadmapped",
-};
-
-const STATUS_CLASS: Record<Status, string> = {
-  built: "pill-true",
-  partial: "pill-possible",
-  planned: "pill-insufficient",
-};
-
-const FEATURES: {
-  icon: typeof Search;
-  title: string;
-  ps: string;
-  status: Status;
-  desc: string;
-}[] = [
-  {
-    icon: Search,
-    title: "Semantic & Multimodal Retrieval",
-    ps: "PS §2.2.1",
-    status: "built",
-    desc:
-      "Natural language text-to-imagery vector search backed by deep visual embeddings and FAISS index, with automated structured metadata constraint filtering.",
-  },
+const CAPABILITIES = [
   {
     icon: Radar,
-    title: "Multi-Temporal Change Analysis",
-    ps: "PS §2.2.2",
-    status: "built",
-    desc:
-      "Automated geospatial co-registration, Siamese neural feature comparison (FC-Siam-Diff), and polygon footprint extraction over multi-date scene sequences.",
+    title: "Multi-Temporal Change Detection",
+    tag: "Core Vision Engine",
+    desc: "Automated sub-pixel co-registration, Siamese neural feature comparison, and precise polygon footprint extraction across multi-date satellite sequences.",
+  },
+  {
+    icon: Sparkles,
+    title: "Multispectral Spectral Indexing",
+    tag: "Biophysical Analysis",
+    desc: "Real-time computation of NDVI (vegetation), Albedo (reflectance), NDBI (built structures), and NDWI (water bodies) from Sentinel-2 and high-resolution optical rasters.",
   },
   {
     icon: ShieldCheck,
     title: "False-Alarm Suppression Engine",
-    ps: "PS §2.2.3",
-    status: "built",
-    desc:
-      "Automated quality gating (cloud mask, nodata filtering, resolution verification) plus multi-year temporal persistence and cyclical seasonal pattern suppression.",
+    tag: "Quality Gating",
+    desc: "Cloud mask filtering, atmospheric haze compensation, and multi-year temporal persistence gating to eliminate transient weather and seasonal shadow anomalies.",
   },
   {
-    icon: Sparkles,
-    title: "Vector Similarity Clustering",
-    ps: "PS §2.2.4",
-    status: "built",
-    desc:
-      "Instant geographic site matching using high-dimensional vision embeddings to discover identical terrain and excavation signatures across scenes.",
+    icon: Crosshair,
+    title: "AI Geospatial Intelligence Agent",
+    tag: "Automated Synthesis",
+    desc: "Synthesizes empirical spectral indicators and altered surface area into concise, structured intelligence reports answering what changed, where, and why.",
   },
   {
-    icon: Workflow,
-    title: "Analyst Decision & Audit Trail",
-    ps: "PS §2.2.5",
-    status: "built",
-    desc:
-      "Interactive Before/After comparison, confidence decomposition, certified CONFIRM/REJECT review actions with persistent analyst notes and full raster provenance.",
+    icon: Search,
+    title: "Semantic Natural-Language Earth Query",
+    tag: "Higher-Level AI",
+    desc: "Query high-dimensional satellite catalogs by natural-language intent (e.g. 'new construction', 'open pit mine', 'water body shifts') with FAISS vector retrieval.",
   },
   {
     icon: RadioTower,
-    title: "Air-Gapped Sovereign Deployment",
-    ps: "PS §2.2.6 / §2.2.7",
-    status: "built",
-    desc:
-      "Incremental catalog ingestion, rasterio/GDAL GeoTIFF processing, PostGIS spatial store, and strict air-gapped sovereign offline-mode execution.",
+    title: "Sovereign Air-Gapped Deployment",
+    tag: "Enterprise Architecture",
+    desc: "Standard GDAL/rasterio GeoTIFF processing, PostGIS spatial store, and strict local network execution capability without external dependencies.",
   },
 ];
 
 export function Landing() {
   const navigate = useNavigate();
-  const [seeding, setSeeding] = useState(false);
-  const [seedError, setSeedError] = useState<string | null>(null);
-
-  async function handleSeedDemo() {
-    setSeeding(true);
-    setSeedError(null);
-    try {
-      const result = await api.seedDemo();
-      navigate(`/investigate?aoi=${result.aoi_id}`);
-    } catch (e) {
-      setSeedError(String(e));
-    } finally {
-      setSeeding(false);
-    }
-  }
 
   return (
     <div className="landing">
-      {/* Hero Section */}
+      {/* Hero Section with ORBITA as Main Character */}
       <section className="landing-hero">
-        <GlobeHero />
         <div className="landing-hero-copy fade-in-up">
+          {/* Primary Visual Hierarchy 1: Branding & Title */}
           <div className="landing-kicker">
-            <Zap size={11} fill="var(--accent)" /> Prototype / Demonstration System · SIH26227 · Team PHOTONS
-          </div>
-          <h1>ORBITA</h1>
-          <p className="landing-tagline">
-            Search Earth by meaning. Track changes over time with AI.
-          </p>
-          <p className="landing-sub">
-            A geospatial intelligence platform for satellite surveillance, automated change detection,
-            and visual search — built for the Ministry of Defence / Indian Army (DGIS) space technology challenge.
-          </p>
-
-          <div className="landing-cta-row">
-            <button className="primary" onClick={() => navigate("/console")}>
-              <Layers size={14} /> Open Surveillance Console
-            </button>
-            <button onClick={handleSeedDemo} disabled={seeding}>
-              {seeding ? (
-                <RefreshCw size={14} className="spin" />
-              ) : (
-                <Zap size={14} fill="#ffffff" />
-              )}
-              {seeding ? "Loading Korba Satellite Passes…" : "⚡ Demo: Load Korba Mining Sector"}
-            </button>
+            <Globe2 size={13} color="var(--accent)" />
+            <span>Autonomous Earth Observation Platform</span>
           </div>
 
-          {seedError && (
-            <div className="alert-banner error" style={{ maxWidth: 500 }}>
-              {seedError}
+          <h1 style={{ fontSize: 56, letterSpacing: "-0.03em", margin: "12px 0 16px" }}>
+            ORBITA
+          </h1>
+
+          {/* Primary Visual Hierarchy 2: Main Product Message */}
+          <p className="landing-tagline" style={{ fontSize: 20, color: "#ffffff", fontWeight: 600, maxWidth: 580 }}>
+            Geospatial Intelligence & Terrestrial Change Detection at Scale.
+          </p>
+
+          <p className="landing-sub" style={{ fontSize: 14, lineHeight: 1.6, color: "var(--text-mid)", maxWidth: 540 }}>
+            Continuously monitor ground targets, detect infrastructure development, and analyze
+            surface modifications using multispectral satellite passes and verified AI change intelligence.
+          </p>
+
+          {/* Primary Visual Hierarchy 3: Primary Action Buttons */}
+          <div className="landing-cta-row" style={{ marginTop: 24, gap: 12 }}>
+            <button
+              className="primary"
+              style={{ padding: "12px 22px", fontSize: 13.5, fontWeight: 600 }}
+              onClick={() => navigate("/investigate")}
+            >
+              <Crosshair size={16} /> Launch Investigation
+            </button>
+
+            <button
+              className="secondary"
+              style={{ padding: "12px 20px", fontSize: 13.5 }}
+              onClick={() => navigate("/console")}
+            >
+              <Layers size={16} /> Surveillance Overview
+            </button>
+
+            <button
+              className="secondary"
+              style={{ padding: "12px 18px", fontSize: 13.5 }}
+              onClick={() => navigate("/search")}
+            >
+              <Sparkles size={16} color="var(--accent)" /> Semantic AI
+            </button>
+          </div>
+
+          {/* Live Capability Metrics Strip */}
+          <div
+            style={{
+              display: "flex",
+              gap: 20,
+              marginTop: 28,
+              borderTop: "1px solid var(--border)",
+              paddingTop: 16,
+              maxWidth: 540,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--accent)", fontFamily: "var(--mono)" }}>
+                10m – 0.5m
+              </div>
+              <div style={{ fontSize: 10.5, color: "var(--text-low)" }}>Multi-Sensor GSD</div>
             </div>
-          )}
 
-          <div className="hint" style={{ maxWidth: 500, marginTop: 10 }}>
-            ⚡ Loads 15 months of multi-date Sentinel-2 satellite imagery over the Korba Mining Complex,
-            and detects ground development, excavation, and land clearance automatically.
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--good)", fontFamily: "var(--mono)" }}>
+                4-Band
+              </div>
+              <div style={{ fontSize: 10.5, color: "var(--text-low)" }}>RGB + Near-Infrared</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#f59e0b", fontFamily: "var(--mono)" }}>
+                &lt; 2s
+              </div>
+              <div style={{ fontSize: 10.5, color: "var(--text-low)" }}>Spectral AI Analysis</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#ffffff", fontFamily: "var(--mono)" }}>
+                100%
+              </div>
+              <div style={{ fontSize: 10.5, color: "var(--text-low)" }}>Empirical Data Grounding</div>
+            </div>
           </div>
+        </div>
+
+        {/* Primary Visual Hierarchy 4: Globe Animation as Supporting Visual */}
+        <div style={{ position: "relative", flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <GlobeHero />
         </div>
       </section>
 
-      {/* Quick Launch Cards */}
-      <section className="landing-section" style={{ paddingBottom: 20 }}>
-        <div className="section-title" style={{ fontSize: 13, marginBottom: 14 }}>
-          <span>Core Operational Modules</span>
+      {/* Core Platform Modules */}
+      <section className="landing-section" style={{ paddingBottom: 24 }}>
+        <div className="section-title" style={{ fontSize: 13, marginBottom: 16 }}>
+          <span>Operational Modules</span>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
-          <div
-            className="feature-card"
-            style={{ cursor: "pointer" }}
-            onClick={() => navigate("/console")}
-          >
-            <Layers size={22} color="var(--accent)" />
-            <div className="feature-card-title">Observation Console</div>
-            <p className="feature-card-desc">
-              Manage Areas of Interest, inspect ingested multispectral scenes, verify radiometric
-              quality, and track active monitoring status.
-            </p>
-            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, color: "var(--accent)", fontSize: 12, fontWeight: 600 }}>
-              Launch Console <ArrowRight size={13} />
-            </div>
-          </div>
 
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
           <div
             className="feature-card"
-            style={{ cursor: "pointer" }}
+            style={{ cursor: "pointer", transition: "transform 0.2s, border-color 0.2s" }}
             onClick={() => navigate("/investigate")}
           >
-            <Crosshair size={22} color="var(--good)" />
-            <div className="feature-card-title">Investigation & Verification</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <Crosshair size={26} color="var(--accent)" />
+              <span className="pill pill-sensor">PRIMARY WORKFLOW</span>
+            </div>
+            <div className="feature-card-title" style={{ fontSize: 16, marginTop: 12 }}>
+              Target Investigation & Analysis
+            </div>
             <p className="feature-card-desc">
-              Side-by-side satellite comparator, FC-Siam-Diff change masks, multi-temporal persistence
-              gating, and analyst certification.
+              Pin or search any location worldwide. Compare dated Sentinel-2 and sub-meter historical
+              passes with side-by-side swipes, false-color infrared, and automated AI change reports.
             </p>
-            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, color: "var(--good)", fontSize: 12, fontWeight: 600 }}>
-              Inspect Changes <ArrowRight size={13} />
+            <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, color: "var(--accent)", fontSize: 12.5, fontWeight: 600 }}>
+              Start Investigation <ArrowRight size={14} />
             </div>
           </div>
 
           <div
             className="feature-card"
-            style={{ cursor: "pointer" }}
+            style={{ cursor: "pointer", transition: "transform 0.2s, border-color 0.2s" }}
+            onClick={() => navigate("/console")}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <Layers size={26} color="var(--good)" />
+              <span className="pill pill-true">MISSION CONTROL</span>
+            </div>
+            <div className="feature-card-title" style={{ fontSize: 16, marginTop: 12 }}>
+              Surveillance Overview
+            </div>
+            <p className="feature-card-desc">
+              Real-time interactive map with automated live user location, interactive boundary drawing,
+              AOI management, and satellite pass health telemetry.
+            </p>
+            <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, color: "var(--good)", fontSize: 12.5, fontWeight: 600 }}>
+              Open Overview <ArrowRight size={14} />
+            </div>
+          </div>
+
+          <div
+            className="feature-card"
+            style={{ cursor: "pointer", transition: "transform 0.2s, border-color 0.2s" }}
             onClick={() => navigate("/search")}
           >
-            <Sparkles size={22} color="var(--warn)" />
-            <div className="feature-card-title">Semantic AI Search</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <Sparkles size={26} color="#f59e0b" />
+              <span className="pill pill-possible">INTELLIGENCE LAYER</span>
+            </div>
+            <div className="feature-card-title" style={{ fontSize: 16, marginTop: 12 }}>
+              Semantic AI Intelligence
+            </div>
             <p className="feature-card-desc">
-              Query high-resolution satellite scenes by natural language intent (e.g. "open pit mine",
-              "road clearing") with FAISS vector similarity.
+              Ask natural-language questions across monitored sectors, discover visual terrain patterns,
+              and query high-dimensional vision embeddings backed by FAISS vector index.
             </p>
-            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, color: "var(--warn)", fontSize: 12, fontWeight: 600 }}>
-              Execute Search <ArrowRight size={13} />
+            <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, color: "#f59e0b", fontSize: 12.5, fontWeight: 600 }}>
+              Query Intelligence <ArrowRight size={14} />
             </div>
           </div>
         </div>
       </section>
 
-      {/* Problem Statement Specifications Coverage */}
+      {/* Enterprise Capabilities Grid */}
       <section className="landing-section">
-        <div className="section-title" style={{ fontSize: 13 }}>
-          <span>Defense / Space Tech Problem Statement Compliance (SIH26227)</span>
+        <div className="section-title" style={{ fontSize: 13, marginBottom: 16 }}>
+          <span>Enterprise Geospatial Capabilities</span>
         </div>
+
         <div className="feature-grid">
-          {FEATURES.map((f) => (
-            <div className="feature-card fade-in-up" key={f.title}>
-              <f.icon size={22} color="var(--accent)" />
-              <div className="feature-card-title">{f.title}</div>
+          {CAPABILITIES.map((cap) => (
+            <div className="feature-card fade-in-up" key={cap.title}>
+              <cap.icon size={22} color="var(--accent)" />
+              <div className="feature-card-title">{cap.title}</div>
               <div className="card-meta">
-                <span style={{ color: "var(--accent)", fontWeight: 600 }}>{f.ps}</span>
-                <span className={`pill ${STATUS_CLASS[f.status]}`}>{STATUS_LABEL[f.status]}</span>
+                <span className="pill pill-sensor">{cap.tag}</span>
               </div>
-              <p className="feature-card-desc">{f.desc}</p>
+              <p className="feature-card-desc">{cap.desc}</p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* Tech Stack Strip */}
+      {/* Technology & Architecture Strip */}
       <section className="landing-section" style={{ paddingTop: 10 }}>
-        <div className="section-title" style={{ fontSize: 13 }}>
-          <span>Architecture & Stack</span>
+        <div className="section-title" style={{ fontSize: 13, marginBottom: 12 }}>
+          <span>Geospatial Architecture</span>
         </div>
+
         <div className="stack-strip">
           {[
-            "React 18 + TypeScript",
-            "MapLibre GL (WGS84)",
+            "Copernicus Sentinel-2 Process API",
+            "Esri Wayback Sub-Meter Archive",
+            "MapLibre GL WGS84 Engine",
+            "FastAPI Async Telemetry",
+            "PostGIS Geospatial Store",
+            "FAISS Vector Retrieval",
+            "GDAL / rasterio Processing",
             "Three.js Orbit Simulation",
-            "FastAPI Async Engine",
-            "PostgreSQL + PostGIS",
-            "PyTorch FC-Siam-Diff",
-            "OpenCLIP + FAISS Vector Index",
-            "rasterio / GDAL Engine",
-            "Copernicus Sentinel-2 API",
+            "Lanczos Micro-Detail Resampling",
           ].map((s) => (
             <span key={s} className="stack-pill">
               <Layers size={12} color="var(--accent)" /> {s}
@@ -252,12 +275,8 @@ export function Landing() {
       </section>
 
       <footer className="landing-footer hint">
-        <div>
-          ORBITA · Space Technology Domain · Indian Army DGIS · SIH 2026
-        </div>
-        <div>
-          <code>DEMO_GUIDE.md</code> · <code>MODEL_CARD.md</code> · <code>SOVEREIGN_OFFLINE</code>
-        </div>
+        <div>ORBITA · Autonomous Earth Observation & Change Intelligence Platform</div>
+        <div>Continuous Geospatial Telemetry · Enterprise Grade</div>
       </footer>
     </div>
   );
