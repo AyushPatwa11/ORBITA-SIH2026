@@ -79,7 +79,7 @@ export const api = {
   scenePreviewUrl: (sceneId: string, options?: { hd?: boolean; mode?: "rgb" | "false_color" | "night" }) => {
     const params = new URLSearchParams();
     if (options?.hd) params.set("hd", "true");
-    if (options?.mode && options.mode !== "rgb") params.set("mode", options.mode);
+    if (options?.mode) params.set("mode", options.mode);
     const qs = params.toString();
     return `${BASE}/scenes/${sceneId}/preview.png${qs ? `?${qs}` : ""}`;
   },

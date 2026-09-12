@@ -14,6 +14,7 @@ import concurrent.futures
 import io
 import logging
 import math
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -152,6 +153,60 @@ def _fetch_sentinelhub_image(
 _WAYBACK_RELEASES_CACHE: list[dict] | None = None
 
 
+def _normalize_wayback_releases(payload) -> list[dict]:
+    """Normalize Esri Wayback manifest payloads from either:
+    1. a list of release objects
+    2. a dict keyed by numeric release IDs with itemTitle/itemID fields
+    Returns list[dict] sorted latest-first with itemId and releaseDatetime normalized.
+    """
+    releases: list[dict] = []
+
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("itemId") or item.get("itemID") or item.get("releaseId") or item.get("id")
+            date_text = item.get("releaseDatetime")
+            if not date_text:
+                date_text = item.get("itemTitle") or ""
+                if "(" in date_text and ")" in date_text:
+                    date_text = date_text.split("(", 1)[1].split(")", 1)[0]
+                if date_text.lower().startswith("wayback "):
+                    date_text = date_text.replace("Wayback ", "", 1)
+            if item_id is None:
+                continue
+            try:
+                releases.append({
+                    "itemId": int(item_id),
+                    "releaseDatetime": str(date_text)[:10],
+                })
+            except Exception:
+                continue
+
+    elif isinstance(payload, dict):
+        for key, item in payload.items():
+            if not isinstance(item, dict):
+                continue
+            item_id = int(key)
+            date_text = item.get("releaseDatetime")
+            if not date_text:
+                title = item.get("itemTitle") or ""
+                # Example: "World Imagery (Wayback 2026-08-05)"
+                parts = re.findall(r"\d{4}-\d{2}-\d{2}", title)
+                if parts:
+                    date_text = parts[0]
+                else:
+                    date_text = ""
+            if date_text:
+                releases.append({
+                    "itemId": item_id,
+                    "releaseDatetime": str(date_text)[:10],
+                })
+
+    releases = sorted(releases, key=lambda r: str(r.get("releaseDatetime", "")), reverse=True)
+    return releases
+
+
 def _get_wayback_releases() -> list[dict]:
     """Fetch the live Wayback release manifest from Esri (cached per process)."""
     global _WAYBACK_RELEASES_CACHE
@@ -165,10 +220,11 @@ def _get_wayback_releases() -> list[dict]:
         )
         if resp.status_code == 200:
             data = resp.json()
-            releases = sorted(data, key=lambda r: r.get("releaseDatetime", ""), reverse=True)
-            _WAYBACK_RELEASES_CACHE = releases
-            logger.info("Loaded %d Wayback releases", len(releases))
-            return releases
+            releases = _normalize_wayback_releases(data)
+            if releases:
+                _WAYBACK_RELEASES_CACHE = releases
+                logger.info("Loaded %d Wayback releases", len(releases))
+                return releases
     except Exception as e:
         logger.warning("Could not load Wayback manifest: %s", e)
 

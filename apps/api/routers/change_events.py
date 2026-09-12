@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -5,6 +6,8 @@ from geoalchemy2.shape import to_shape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+logger = logging.getLogger(__name__)
 
 from apps.api.core.db import get_db
 from apps.api.models import ChangeEvent, ChangeObservation, Scene
@@ -62,37 +65,47 @@ async def download_scene(scene_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 
 @router.post("/change-events/detect", response_model=list[ChangeEventOut])
 async def trigger_change_detection(payload: ChangeDetectRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Scene)
-        .where(Scene.id.in_([payload.before_scene_id, payload.after_scene_id]))
-        .options(selectinload(Scene.quality_report))
-    )
-    scenes = {str(scene.id): scene for scene in result.scalars().all()}
-
-    before = scenes.get(str(payload.before_scene_id))
-    after = scenes.get(str(payload.after_scene_id))
-    if not before or not after:
-        raise HTTPException(404, "One or both scenes not found")
-    if before.ingestion_state != "INDEXED" or after.ingestion_state != "INDEXED":
-        raise HTTPException(
-            409, "Both scenes must be INDEXED (downloaded + quality-passed) before detection."
-        )
-
     try:
-        events = await detect_change(db, payload.aoi_id, before, after)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+        result = await db.execute(
+            select(Scene)
+            .where(Scene.id.in_([payload.before_scene_id, payload.after_scene_id]))
+            .options(selectinload(Scene.quality_report))
+        )
+        scenes = {str(scene.id): scene for scene in result.scalars().all()}
 
-    return [_event_to_out(e) for e in events]
+        before = scenes.get(str(payload.before_scene_id))
+        after = scenes.get(str(payload.after_scene_id))
+        if not before or not after:
+            raise HTTPException(404, "One or both scenes not found")
+        if before.ingestion_state != "INDEXED" or after.ingestion_state != "INDEXED":
+            raise HTTPException(
+                409, "Both scenes must be INDEXED (downloaded + quality-passed) before detection."
+            )
+
+        try:
+            events = await detect_change(db, payload.aoi_id, before, after)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+        return [_event_to_out(e) for e in events]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Change detection failed because the DB service is unavailable: %s", exc)
+        raise HTTPException(503, "Satellite analysis could not start because the database service is unavailable.") from exc
 
 
 @router.get("/change-events", response_model=list[ChangeEventOut])
 async def list_change_events(aoi_id: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)):
-    query = select(ChangeEvent).order_by(ChangeEvent.created_at.desc())
-    if aoi_id:
-        query = query.where(ChangeEvent.aoi_id == aoi_id)
-    result = await db.execute(query)
-    return [_event_to_out(e) for e in result.scalars().all()]
+    try:
+        query = select(ChangeEvent).order_by(ChangeEvent.created_at.desc())
+        if aoi_id:
+            query = query.where(ChangeEvent.aoi_id == aoi_id)
+        result = await db.execute(query)
+        return [_event_to_out(e) for e in result.scalars().all()]
+    except Exception as exc:
+        logger.warning("Change event listing failed because the DB service is unavailable: %s", exc)
+        return []
 
 
 @router.post("/change-events/{event_id}/review", response_model=ChangeEventOut)

@@ -93,8 +93,8 @@ export function BeforeAfterSwipe({
     );
   }
 
-  const activeBeforeUrl = appendModeAndHD(beforeUrl, visMode, false)!;
-  const activeAfterUrl = appendModeAndHD(afterUrl, visMode, false)!;
+  const activeBeforeUrl = appendModeAndHD(beforeUrl, visMode, true)!;
+  const activeAfterUrl = appendModeAndHD(afterUrl, visMode, true)!;
   const hdBeforeUrl = appendModeAndHD(beforeUrl, visMode, true)!;
   const hdAfterUrl = appendModeAndHD(afterUrl, visMode, true)!;
 

@@ -1,4 +1,6 @@
+import logging
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from sqlalchemy import select
@@ -12,6 +14,8 @@ from apps.api.services.ingestion import (
     run_ingestion_for_aoi,
 )
 from apps.api.services.preview import render_rgb_preview
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["scenes"])
 
@@ -66,15 +70,30 @@ async def scene_preview(
     mode: str = "rgb",
     db: AsyncSession = Depends(get_db),
 ):
-    scene = await db.get(Scene, scene_id)
-    if not scene:
-        raise HTTPException(404, "Scene not found")
-    if not scene.local_path:
-        raise HTTPException(409, "Scene has not been downloaded yet — nothing to render")
-
+    repo_root = Path(__file__).resolve().parents[3]
     try:
-        png_bytes = render_rgb_preview(scene.local_path, hd=hd, mode=mode)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"Failed to render preview: {exc}")
+        scene = await db.get(Scene, scene_id)
+        if not scene:
+            raise HTTPException(404, "Scene not found")
+        if not scene.local_path:
+            raise HTTPException(409, "Scene has not been downloaded yet — nothing to render")
 
-    return Response(content=png_bytes, media_type="image/png")
+        local_path = Path(scene.local_path)
+        if not local_path.is_absolute():
+            local_path = repo_root / local_path
+
+        if not local_path.exists():
+            raise HTTPException(409, "Scene raster file is missing — nothing to render")
+
+        try:
+            png_bytes = render_rgb_preview(str(local_path), hd=hd, mode=mode)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Scene preview render failed for %s: %s", scene_id, exc)
+            raise HTTPException(409, "Scene raster file is missing or malformed — preview could not be rendered") from exc
+
+        return Response(content=png_bytes, media_type="image/png")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Scene preview service failed because the database service is unavailable: %s", exc)
+        raise HTTPException(503, "Scene preview could not run because the database service is unavailable.") from exc
