@@ -1,5 +1,5 @@
 import asyncio
-import os
+import logging
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -8,16 +8,15 @@ from typing import Any
 import numpy as np
 import rasterio
 from rasterio.transform import from_origin
-from rasterio.warp import transform_bounds
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.config import settings
 from apps.api.core.db import get_db
-from apps.api.models import AOI, QualityReport, Scene, ChangeEvent
+from apps.api.core import memory_store
+from apps.api.models import AOI, Scene, ChangeEvent
 from apps.api.schemas import ChangeEventOut
 from apps.api.services.change_detection import detect_change
 from apps.api.services.change_analyzer import analyze_change as run_change_analysis
@@ -27,7 +26,21 @@ from apps.api.services.ai_agent import analyze_geospatial_changes, answer_agent_
 from geoalchemy2.shape import to_shape
 from apps.api.services.satellite_fetcher import fetch_and_write_satellite_raster
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/location", tags=["location"])
+
+
+async def _try_commit(db: AsyncSession) -> bool:
+    try:
+        await db.commit()
+        return True
+    except Exception as exc:
+        logger.warning("Database persist skipped because Postgres is unavailable: %s", exc)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return False
 
 PRESET_LOCATIONS = [
     {
@@ -274,7 +287,7 @@ async def pin_and_fetch_location(
         f"{lon_max} {lat_max}, {lon_min} {lat_max}, {lon_min} {lat_min}))"
     )
 
-    # Create AOI in Database
+    # Create AOI (Postgres when available; otherwise keep it in memory)
     aoi = AOI(
         id=uuid.uuid4(),
         name=payload.name if payload.name != "Surveillance Location" else f"Surveillance Zone ({lat:.4f}° N, {lng:.4f}° E)",
@@ -283,7 +296,7 @@ async def pin_and_fetch_location(
         monitoring_enabled=True,
     )
     db.add(aoi)
-    await db.flush()
+    memory_store.remember_aoi(aoi)
 
     # Generate real optical satellite GeoTIFF rasters for Before & After in parallel
     demo_dir = Path(settings.raw_dir) / "demo"
@@ -360,7 +373,9 @@ async def pin_and_fetch_location(
         ingestion_state="INDEXED",
     )
     db.add(after_scene)
-    await db.commit()
+    memory_store.remember_scene(before_scene)
+    memory_store.remember_scene(after_scene)
+    await _try_commit(db)
 
     # Index embeddings into FAISS
     try:
@@ -467,7 +482,19 @@ async def pin_and_fetch_location(
         logger_error = str(exc)
 
     def _event_out(e: ChangeEvent) -> dict:
-        geom = to_shape(e.geometry) if e.geometry is not None else None
+        geom = None
+        if e.geometry is not None:
+            try:
+                geom = to_shape(e.geometry)
+            except Exception:
+                raw = str(e.geometry)
+                if ";" in raw:
+                    raw = raw.split(";", 1)[1]
+                try:
+                    from shapely import wkt as shapely_wkt
+                    geom = shapely_wkt.loads(raw)
+                except Exception:
+                    geom = None
         return {
             "id": str(e.id),
             "aoi_id": str(e.aoi_id),
@@ -481,7 +508,7 @@ async def pin_and_fetch_location(
             "model_version": e.model_version,
             "source_scenes": e.source_scenes,
             "supporting_observations": e.supporting_observations,
-            "created_at": e.created_at.isoformat(),
+            "created_at": (e.created_at or datetime.utcnow()).isoformat(),
             "geometry": geom.__geo_interface__ if geom else None,
         }
 

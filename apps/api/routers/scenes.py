@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.db import get_db
+from apps.api.core import memory_store
 from apps.api.models import AOI, Scene
 from apps.api.schemas import IngestionTriggerOut, SceneOut
 from apps.api.services.ingestion import (
@@ -57,10 +58,16 @@ async def register_from_sidecar(
 
 @router.get("/aois/{aoi_id}/scenes", response_model=list[SceneOut])
 async def list_scenes(aoi_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Scene).where(Scene.aoi_id == aoi_id).order_by(Scene.acquisition_time.desc())
-    )
-    return result.scalars().all()
+    try:
+        result = await db.execute(
+            select(Scene).where(Scene.aoi_id == aoi_id).order_by(Scene.acquisition_time.desc())
+        )
+        scenes = list(result.scalars().all())
+        if scenes:
+            return scenes
+    except Exception as exc:
+        logger.warning("Scene listing falling back to in-memory store: %s", exc)
+    return memory_store.list_scenes_for_aoi(aoi_id)
 
 
 @router.get("/scenes/{scene_id}/preview.png")
@@ -73,6 +80,14 @@ async def scene_preview(
     repo_root = Path(__file__).resolve().parents[3]
     try:
         scene = await db.get(Scene, scene_id)
+    except Exception as exc:
+        logger.warning("Scene preview falling back to in-memory store: %s", exc)
+        scene = None
+
+    if not scene:
+        scene = memory_store.get_scene(scene_id)
+
+    try:
         if not scene:
             raise HTTPException(404, "Scene not found")
         if not scene.local_path:

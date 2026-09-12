@@ -48,10 +48,15 @@ async def detect_change(
         raise ValueError("Both scenes must be downloaded (INDEXED) before change detection.")
 
     # Read quality scores through explicit SQL, not relationship lazy loading.
-    before_report = await db.execute(select(QualityReport).where(QualityReport.scene_id == before.id))
-    after_report = await db.execute(select(QualityReport).where(QualityReport.scene_id == after.id))
-    before_quality = before_report.scalar_one_or_none()
-    after_quality = after_report.scalar_one_or_none()
+    before_quality = None
+    after_quality = None
+    try:
+        before_report = await db.execute(select(QualityReport).where(QualityReport.scene_id == before.id))
+        after_report = await db.execute(select(QualityReport).where(QualityReport.scene_id == after.id))
+        before_quality = before_report.scalar_one_or_none()
+        after_quality = after_report.scalar_one_or_none()
+    except Exception:
+        pass
 
     quality_score = min(
         (before_quality.quality_score if before_quality else 0.5),
@@ -117,7 +122,13 @@ async def detect_change(
         db.add(event)
         events.append(event)
 
-    await db.commit()
-    for e in events:
-        await db.refresh(e)
+    try:
+        await db.commit()
+        for e in events:
+            await db.refresh(e)
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
     return events
