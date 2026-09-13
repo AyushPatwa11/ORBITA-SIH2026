@@ -14,7 +14,7 @@ import type {
   TimelineAnalysis,
 } from "../types";
 
-const BASE = import.meta.env.VITE_API_URL || "https://orbita-sih2026.onrender.com";
+const BASE = (import.meta.env.VITE_API_URL || "https://orbita-sih2026.onrender.com").replace(/\/+$/, "");
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, {
