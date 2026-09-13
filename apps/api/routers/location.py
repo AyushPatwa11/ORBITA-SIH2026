@@ -20,7 +20,6 @@ from apps.api.models import AOI, Scene, ChangeEvent
 from apps.api.schemas import ChangeEventOut
 from apps.api.services.change_detection import detect_change
 from apps.api.services.change_analyzer import analyze_change as run_change_analysis
-from apps.api.services.embeddings import index_scene
 from apps.api.services.quality import assess_raster
 from apps.api.services.ai_agent import analyze_geospatial_changes, answer_agent_question
 from geoalchemy2.shape import to_shape
@@ -395,13 +394,6 @@ async def pin_and_fetch_location(
     memory_store.remember_scene(before_scene)
     memory_store.remember_scene(after_scene)
     await _try_commit(db)
-
-    # Index embeddings into FAISS
-    try:
-        await index_scene(db, before_scene)
-        await index_scene(db, after_scene)
-    except Exception:
-        pass
 
     # Run AI Change Detection
     events = []
