@@ -31,9 +31,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then((d) => setOfflineMode(Boolean(d.offline_mode)))
+    api.health()
+      .then((d) => setOfflineMode(d.offline_mode))
       .catch(() => setOfflineMode(false));
 
     refreshStats();

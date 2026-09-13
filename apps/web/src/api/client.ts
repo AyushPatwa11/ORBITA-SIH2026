@@ -30,6 +30,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  health: () => request<{ status: string; offline_mode: boolean; environment: string }>("/health"),
+
   listAOIs: () => request<AOI[]>("/aois"),
 
   createAOI: (payload: {
