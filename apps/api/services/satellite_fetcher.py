@@ -333,6 +333,41 @@ def _pick_wayback_release_for_date(
     return int(chosen["itemId"]), str(chosen.get("releaseDatetime", ""))[:10]
 
 
+def _wayback_release_candidates(
+    target_dt: datetime,
+    first_release_id: int,
+    exclude_ids: set[int] | None = None,
+    limit: int = 4,
+) -> list[tuple[int, str]]:
+    """Return nearby dated releases so coverage gaps do not fall back to blurry EOX."""
+    excluded = exclude_ids or set()
+    target = target_dt.date()
+    releases = [
+        release for release in _get_wayback_releases()
+        if int(release["itemId"]) not in excluded
+    ]
+    releases.sort(
+        key=lambda release: abs(
+            datetime.strptime(str(release["releaseDatetime"])[:10], "%Y-%m-%d").date() - target
+        )
+    )
+    first_date = ""
+    for release in releases:
+        if int(release["itemId"]) == first_release_id:
+            first_date = str(release["releaseDatetime"])[:10]
+            break
+    candidates = [(first_release_id, first_date)]
+    candidate_ids = {first_release_id}
+    for release in releases:
+        item = (int(release["itemId"]), str(release["releaseDatetime"])[:10])
+        if item[0] not in candidate_ids:
+            candidates.append(item)
+            candidate_ids.add(item[0])
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
 def _pick_wayback_release_for_year(target_year: int) -> int:
     """Find the Wayback release ID closest to (and not exceeding) the target year."""
     item_id, _ = _pick_wayback_release_for_date(datetime(target_year, 12, 31))
@@ -623,13 +658,21 @@ def fetch_satellite_image(
     # (10 m pixels), Wayback provides sub-meter imagery and therefore keeps
     # small investigation areas sharp instead of enlarging a blurry mosaic.
     if wayback_release_id is not None:
-        release_id = wayback_release_id
-        release_date = ""
+        candidates = [(wayback_release_id, "")]
     else:
-        release_id, release_date = _pick_wayback_release_for_date(target_dt, exclude_wayback_ids)
-    img = _fetch_wayback_tiles(lat, lng, delta, release_id, tile_size=target_px)
-    if img is not None:
-        return _annotate(img, **{**read_image_meta(img), "release_date": release_date, "role": role})
+        first_release_id, _ = _pick_wayback_release_for_date(target_dt, exclude_wayback_ids)
+        candidates = _wayback_release_candidates(
+            target_dt,
+            first_release_id,
+            exclude_wayback_ids,
+        )
+    for release_id, release_date in candidates:
+        img = _fetch_wayback_tiles(lat, lng, delta, release_id, tile_size=target_px)
+        if img is not None:
+            return _annotate(
+                img,
+                **{**read_image_meta(img), "release_date": release_date, "role": role},
+            )
 
     # EOX remains a real-data fallback when the historical tile release has
     # no coverage for the requested location/date.
