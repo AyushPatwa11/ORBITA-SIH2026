@@ -1,4 +1,5 @@
 import os
+import logging
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 from contextlib import asynccontextmanager
@@ -10,9 +11,16 @@ from apps.api.core.config import settings
 from apps.api.core.db import init_db
 from apps.api.routers import aois, change_events, demo, location, scenes, search
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    allowed_origins = [
+        "http://localhost:5173",
+        settings.frontend_url,
+    ]
+    logger.info("CORS allowed origins: %s", allowed_origins)
     await init_db()
     yield
 
@@ -26,10 +34,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        settings.frontend_url,
-    ],
+    allow_origins=["http://localhost:5173", settings.frontend_url],
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -15,6 +15,7 @@ import type {
 } from "../types";
 
 const BASE = (import.meta.env.VITE_API_URL || "https://orbita-sih2026.onrender.com").replace(/\/+$/, "");
+console.log("[ORBITA] API base URL:", BASE);
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, {
