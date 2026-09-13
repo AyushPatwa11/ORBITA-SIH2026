@@ -28,7 +28,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://orbita-sih-2026.vercel.app",
+        settings.frontend_url,
     ],
     allow_methods=["*"],
     allow_headers=["*"],

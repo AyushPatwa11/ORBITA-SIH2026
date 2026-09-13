@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     offline_mode: bool = False
     environment: str = "development"
     log_level: str = "INFO"
+    frontend_url: str = "https://orbita-sih-2026.vercel.app"
 
 
 settings = Settings()
