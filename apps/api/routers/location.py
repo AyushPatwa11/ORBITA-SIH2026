@@ -196,15 +196,16 @@ async def geocode_address(q: str):
     """Geocode any city, address, landmark or surveillance site via OpenStreetMap Nominatim."""
     if not q or len(q.strip()) < 2:
         return []
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": q.strip(), "format": "json", "limit": 6, "addressdetails": 1},
-                headers={"User-Agent": "ORBITA-SIH2026/1.0"},
-            )
-            if resp.status_code == 200:
+    import httpx
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        for attempt in range(2):
+            try:
+                resp = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": q.strip(), "format": "json", "limit": 6, "addressdetails": 1},
+                    headers={"User-Agent": "ORBITA-SIH2026/1.0"},
+                )
+                resp.raise_for_status()
                 results = []
                 for item in resp.json():
                     results.append({
@@ -214,9 +215,13 @@ async def geocode_address(q: str):
                         "type": item.get("type", "location"),
                     })
                 return results
-    except Exception:
-        pass
-    return []
+            except (httpx.HTTPError, ValueError) as exc:
+                if attempt == 1:
+                    logger.warning("Geocoding failed after retries: %s", exc)
+                    raise HTTPException(
+                        503,
+                        "Geocoding service is temporarily unavailable. Try pinning directly on the map.",
+                    ) from exc
 
 
 @router.post("/pin-and-fetch")
@@ -319,34 +324,42 @@ async def pin_and_fetch_location(
     delta_deg = max(delta_lat, delta_lng)
 
     # Concurrent parallel fetch to cut retrieval latency in half
-    await asyncio.gather(
-        asyncio.to_thread(
-            fetch_and_write_satellite_raster,
-            b_raster_path,
-            lat,
-            lng,
-            role="before",
-            time_preset=payload.time_preset,
-            target_dt=before_dt,
-            change_type=change_type,
-            delta=delta_deg,
-            tile_size=tile_size,
-            force_refresh=True,
-        ),
-        asyncio.to_thread(
-            fetch_and_write_satellite_raster,
-            a_raster_path,
-            lat,
-            lng,
-            role="after",
-            time_preset=payload.time_preset,
-            target_dt=after_dt,
-            change_type=change_type,
-            delta=delta_deg,
-            tile_size=tile_size,
-            force_refresh=True,
-        ),
-    )
+    try:
+        await asyncio.gather(
+            asyncio.to_thread(
+                fetch_and_write_satellite_raster,
+                b_raster_path,
+                lat,
+                lng,
+                role="before",
+                time_preset=payload.time_preset,
+                target_dt=before_dt,
+                change_type=change_type,
+                delta=delta_deg,
+                tile_size=tile_size,
+                force_refresh=True,
+            ),
+            asyncio.to_thread(
+                fetch_and_write_satellite_raster,
+                a_raster_path,
+                lat,
+                lng,
+                role="after",
+                time_preset=payload.time_preset,
+                target_dt=after_dt,
+                change_type=change_type,
+                delta=delta_deg,
+                tile_size=tile_size,
+                force_refresh=True,
+            ),
+        )
+    except RuntimeError as exc:
+        logger.error("Satellite imagery retrieval failed: %s", exc)
+        raise HTTPException(
+            503,
+            "Satellite imagery is temporarily unavailable from all configured real-data sources. "
+            "Please retry later or choose another time window.",
+        ) from exc
 
     before_scene = Scene(
         id=uuid.uuid4(),
