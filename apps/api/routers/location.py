@@ -230,31 +230,37 @@ async def pin_and_fetch_location(
     if not (-90 <= lat <= 90 and -180 <= lng <= 180):
         raise HTTPException(400, "Invalid coordinates provided.")
 
-    # Determine After Date & Before Date based on preset or custom input
-    now = datetime(2026, 9, 10, 10, 32, 0)
-
-    if payload.time_preset == "1_week":
-        after_dt = now
-        before_dt = now - timedelta(days=7)
-    elif payload.time_preset == "1_month":
-        after_dt = now
-        before_dt = now - timedelta(days=30)
-    elif payload.time_preset == "1_year":
-        after_dt = now
-        before_dt = now - timedelta(days=365)
-    elif payload.time_preset == "5_years":
-        after_dt = now
-        before_dt = now - timedelta(days=365 * 5)
-    elif payload.time_preset == "custom":
+    # Honor explicit UI datetimes whenever they parse; presets only fill gaps.
+    now = datetime.utcnow().replace(microsecond=0)
+    before_dt = None
+    after_dt = None
+    if payload.before_datetime:
         try:
-            before_dt = datetime.fromisoformat(payload.before_datetime) if payload.before_datetime else now - timedelta(days=365)
-            after_dt = datetime.fromisoformat(payload.after_datetime) if payload.after_datetime else now
+            before_dt = datetime.fromisoformat(payload.before_datetime)
         except Exception:
-            before_dt = now - timedelta(days=365)
-            after_dt = now
-    else:
-        after_dt = now
-        before_dt = now - timedelta(days=365)
+            before_dt = None
+    if payload.after_datetime:
+        try:
+            after_dt = datetime.fromisoformat(payload.after_datetime)
+        except Exception:
+            after_dt = None
+
+    if before_dt is None or after_dt is None:
+        if payload.time_preset == "1_week":
+            after_dt = after_dt or now
+            before_dt = before_dt or (after_dt - timedelta(days=7))
+        elif payload.time_preset == "1_month":
+            after_dt = after_dt or now
+            before_dt = before_dt or (after_dt - timedelta(days=30))
+        elif payload.time_preset == "5_years":
+            after_dt = after_dt or now
+            before_dt = before_dt or (after_dt - timedelta(days=365 * 5))
+        else:
+            after_dt = after_dt or now
+            before_dt = before_dt or (after_dt - timedelta(days=365))
+
+    if before_dt >= after_dt:
+        before_dt, after_dt = after_dt - timedelta(days=365), after_dt
 
     # Determine change type hint
     change_type = payload.change_type_hint or "DEVELOPMENT / CONSTRUCTION"

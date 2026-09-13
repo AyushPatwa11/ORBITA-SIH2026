@@ -12,9 +12,11 @@ Saves standard 4-band GeoTIFFs (RGB + NIR) with EPSG:3857 bounds.
 
 import concurrent.futures
 import io
+import json
 import logging
 import math
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -31,6 +33,56 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path("data/raw/satellite_cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Sentinel-2 L2A native GSD for RGB/NIR is 10 m. Requesting more output
+# pixels than span_meters/10 only upsamples 10 m data and looks like HD.
+_S2_GSD_M = 10.0
+_EARTH_CIRCUM_M = 40075016.686
+_TARGET_PREVIEW_PX = 1536
+_MAX_OUTPUT_PX = 2500
+_MAX_TILES = 81
+_SH_TOKEN: tuple[str, float] | None = None
+
+
+def span_meters(delta_deg: float) -> float:
+    return max(1.0, float(delta_deg) * 2.0 * 111320.0)
+
+
+def sentinel2_native_px(delta_deg: float) -> int:
+    return max(1, int(span_meters(delta_deg) / _S2_GSD_M))
+
+
+def sentinel2_needs_upsample(delta_deg: float, target_px: int) -> bool:
+    """True when 10 m Sentinel-2 cannot fill the viewer without upsampling."""
+    return sentinel2_native_px(delta_deg) < int(target_px * 0.9)
+
+
+def zoom_for_span(lat: float, span_m: float, target_px: int, max_z: int = 19) -> int:
+    """Web-Mercator zoom whose native tile GSD yields ~target_px across the AOI."""
+    lat_cos = max(0.15, abs(math.cos(math.radians(lat))))
+    ratio = _EARTH_CIRCUM_M * lat_cos * max(1, target_px) / (256.0 * max(span_m, 1.0))
+    z = math.ceil(math.log2(max(1.0, ratio)))
+    return int(max(12, min(max_z, z)))
+
+
+def meters_per_pixel(lat: float, zoom: int) -> float:
+    lat_cos = max(0.15, abs(math.cos(math.radians(lat))))
+    return _EARTH_CIRCUM_M * lat_cos / (256.0 * (2.0 ** zoom))
+
+
+def _annotate(img: Image.Image, **meta) -> Image.Image:
+    img.info["orbita_meta"] = json.dumps(meta)
+    return img
+
+
+def read_image_meta(img: Image.Image) -> dict:
+    raw = img.info.get("orbita_meta")
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +103,33 @@ function evaluatePixel(s) {
 """
 
 
+def _sentinelhub_token() -> str | None:
+    global _SH_TOKEN
+    now = time.time()
+    if _SH_TOKEN and _SH_TOKEN[1] > now + 30:
+        return _SH_TOKEN[0]
+    try:
+        token_resp = httpx.post(
+            settings.copernicus_token_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": settings.copernicus_client_id,
+                "client_secret": settings.copernicus_client_secret,
+            },
+            timeout=20.0,
+        )
+        if token_resp.status_code != 200:
+            logger.warning("SH token failed: %s", token_resp.text[:200])
+            return None
+        body = token_resp.json()
+        token = body["access_token"]
+        _SH_TOKEN = (token, now + float(body.get("expires_in", 600)))
+        return token
+    except Exception as e:
+        logger.warning("SH auth error: %s", e)
+        return None
+
+
 def _fetch_sentinelhub_image(
     lat: float,
     lng: float,
@@ -67,32 +146,25 @@ def _fetch_sentinelhub_image(
     if not settings.copernicus_client_id or not settings.copernicus_client_secret:
         return None
 
-    # --- Step 1: get OAuth token (synchronous) ---
-    try:
-        token_resp = httpx.post(
-            settings.copernicus_token_url,
-            data={
-                "grant_type": "client_credentials",
-                "client_id": settings.copernicus_client_id,
-                "client_secret": settings.copernicus_client_secret,
-            },
-            timeout=20.0,
+    # Skip Sentinel-2 when the AOI is smaller than native 10 m coverage of
+    # the requested canvas — that path is the source of school-scale blur.
+    native_px = sentinel2_native_px(delta)
+    if native_px < int(tile_size * 0.9):
+        logger.info(
+            "Skipping Sentinel Hub for small AOI (native 10m would be %d px, need %d)",
+            native_px,
+            tile_size,
         )
-        if token_resp.status_code != 200:
-            logger.warning("SH token failed: %s", token_resp.text[:200])
-            return None
-        token = token_resp.json()["access_token"]
-    except Exception as e:
-        logger.warning("SH auth error: %s", e)
+        return None
+
+    token = _sentinelhub_token()
+    if not token:
         return None
 
     # --- Step 2: build Process API request ---
     bbox = [lng - delta, lat - delta, lng + delta, lat + delta]
-    
-    # Sentinel-2 native resolution is 10m/px.
-    # Span in meters is approximately delta * 2 * 111320.
-    span_meters = delta * 2.0 * 111320.0
-    native_px = max(16, min(2500, int(span_meters / 10.0)))
+    # Request native 10 m pixels only — never upsample S2 into fake HD.
+    out_px = max(64, min(_MAX_OUTPUT_PX, native_px))
 
     payload = {
         "input": {
@@ -115,8 +187,8 @@ def _fetch_sentinelhub_image(
             ],
         },
         "output": {
-            "width": native_px,
-            "height": native_px,
+            "width": out_px,
+            "height": out_px,
             "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
         },
         "evalscript": _SH_EVALSCRIPT_TRUE_COLOR,
@@ -134,10 +206,8 @@ def _fetch_sentinelhub_image(
         )
         if resp.status_code == 200 and len(resp.content) > 5000:
             img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-            # Apply slight sharpening
-            img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2))
-            logger.info("✅ SH Process API success for %s–%s", date_from.date(), date_to.date())
-            return img
+            logger.info("✅ SH Process API success for %s–%s (%dx%d native 10 m)", date_from.date(), date_to.date(), img.size[0], img.size[1])
+            return _annotate(img, source="sentinel-2-l2a", gsd_m=_S2_GSD_M, pixels=list(img.size))
         else:
             logger.warning("SH Process API returned %s: %s", resp.status_code, resp.text[:300])
     except Exception as e:
@@ -247,21 +317,26 @@ def _get_wayback_releases() -> list[dict]:
     return _WAYBACK_RELEASES_CACHE
 
 
+def _pick_wayback_release_for_date(
+    target_dt: datetime,
+    exclude_ids: set[int] | None = None,
+) -> tuple[int, str]:
+    """Latest Wayback release on or before target_dt, skipping exclude_ids."""
+    releases = _get_wayback_releases()
+    exclude_ids = exclude_ids or set()
+    target = target_dt.strftime("%Y-%m-%d")
+    eligible = [r for r in releases if int(r["itemId"]) not in exclude_ids]
+    if not eligible:
+        eligible = list(releases)
+    on_or_before = [r for r in eligible if str(r.get("releaseDatetime", ""))[:10] <= target]
+    chosen = on_or_before[0] if on_or_before else eligible[-1]
+    return int(chosen["itemId"]), str(chosen.get("releaseDatetime", ""))[:10]
+
+
 def _pick_wayback_release_for_year(target_year: int) -> int:
     """Find the Wayback release ID closest to (and not exceeding) the target year."""
-    releases = _get_wayback_releases()
-    best_id: int | None = None
-    best_year: int = 0
-    for r in releases:
-        dt_str = r.get("releaseDatetime", "")
-        try:
-            yr = int(dt_str[:4])
-        except Exception:
-            continue
-        if yr <= target_year and yr >= best_year:
-            best_year = yr
-            best_id = r.get("itemId") or r.get("releaseId")
-    return best_id or 35482  # latest as safe default
+    item_id, _ = _pick_wayback_release_for_date(datetime(target_year, 12, 31))
+    return item_id
 
 
 def _lat_lng_to_tile(lat: float, lng: float, zoom: int) -> tuple[int, int]:
@@ -272,58 +347,36 @@ def _lat_lng_to_tile(lat: float, lng: float, zoom: int) -> tuple[int, int]:
     return x, y
 
 
-def _fetch_wayback_tiles(
+def _assemble_mercator_mosaic(
     lat: float,
     lng: float,
     delta: float,
-    release_id: int,
-    tile_size: int = 1024,
+    z: int,
+    x_min: int,
+    y_min: int,
+    x_max: int,
+    y_max: int,
+    url_fn,
 ) -> Image.Image | None:
-    """Fetch Esri Wayback tiles for a specific release and assemble a high-resolution cropped mosaic."""
-    span_deg = max(0.001, delta * 2.0)
-    # Calculate optimal zoom to sample ~1024-1400 source pixels across the target AOI
-    calculated_z = int(math.ceil(math.log2(max(1.0, 1440.0 / span_deg))))
-    # Allow zoom up to 23 to get highest resolution available for small areas
-    z = max(13, min(23, calculated_z))
-
-    min_lat, max_lat = lat - delta, lat + delta
-    min_lng, max_lng = lng - delta, lng + delta
-
-    x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
-    x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
-
-    # Ensure tile count is within reason (e.g. max 64 tiles), fallback zoom if too wide
-    while (x_max - x_min + 1) * (y_max - y_min + 1) > 64 and z > 13:
-        z -= 1
-        x_min, y_min = _lat_lng_to_tile(max_lat, min_lng, z)
-        x_max, y_max = _lat_lng_to_tile(min_lat, max_lng, z)
-
     canvas_w = (x_max - x_min + 1) * 256
     canvas_h = (y_max - y_min + 1) * 256
     canvas = Image.new("RGB", (canvas_w, canvas_h))
-
     tile_coords = [(x, y) for x in range(x_min, x_max + 1) for y in range(y_min, y_max + 1)]
 
     def fetch_one(coord):
         tx, ty = coord
-        url = (
-            f"https://wayback.maptiles.arcgis.com/arcgis/rest/services/"
-            f"World_Imagery/MapServer/tile/{release_id}/{z}/{ty}/{tx}"
-        )
+        url = url_fn(tx, ty, z)
         try:
-            with httpx.Client(timeout=10.0) as client:
-                resp = client.get(url, headers={"User-Agent": "Orbita-Geospatial/1.0"})
-                if resp.status_code == 200 and len(resp.content) > 500:
-                    t_img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-                    return tx, ty, t_img
+            resp = httpx.get(url, headers={"User-Agent": "ORBITA-SIH2026/1.0"}, timeout=12.0)
+            if resp.status_code == 200 and len(resp.content) > 500:
+                return tx, ty, Image.open(io.BytesIO(resp.content)).convert("RGB")
         except Exception as e:
-            logger.debug("Wayback tile %s failed: %s", url, e)
+            logger.debug("Tile failed %s: %s", url, e)
         return tx, ty, None
 
     tiles_fetched = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(fetch_one, tile_coords)
-        for tx, ty, t_img in results:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        for tx, ty, t_img in executor.map(fetch_one, tile_coords):
             if t_img is not None:
                 canvas.paste(t_img, ((tx - x_min) * 256, (ty - y_min) * 256))
                 tiles_fetched += 1
@@ -332,6 +385,8 @@ def _fetch_wayback_tiles(
         return None
 
     n = 2.0 ** z
+    min_lat, max_lat = lat - delta, lat + delta
+    min_lng, max_lng = lng - delta, lng + delta
 
     def to_global_px(clat: float, clng: float) -> tuple[float, float]:
         gx = ((clng + 180.0) / 360.0) * (n * 256)
@@ -345,16 +400,63 @@ def _fetch_wayback_tiles(
     crop_y0 = max(0, int(gy0 - y_min * 256))
     crop_x1 = min(canvas_w, int(gx1 - x_min * 256))
     crop_y1 = min(canvas_h, int(gy1 - y_min * 256))
+    if crop_x1 - crop_x0 < 8 or crop_y1 - crop_y0 < 8:
+        return None
+    cropped = canvas.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+    cropped.info["tiles_fetched"] = tiles_fetched
+    return cropped
 
-    if crop_x1 > crop_x0 and crop_y1 > crop_y0:
-        cropped = canvas.crop((crop_x0, crop_y0, crop_x1, crop_y1))
-        res = cropped
-    else:
-        res = canvas
 
-    res = res.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
-    logger.info("✅ Wayback release %s fetched %d tiles at z=%d (high resolution)", release_id, tiles_fetched, z)
-    return res
+def _fetch_wayback_tiles(
+    lat: float,
+    lng: float,
+    delta: float,
+    release_id: int,
+    tile_size: int = 1536,
+) -> Image.Image | None:
+    """Fetch Esri Wayback tiles at a zoom whose native GSD fills tile_size pixels."""
+    span_m = span_meters(delta)
+    z = zoom_for_span(lat, span_m, tile_size, max_z=19)
+
+    min_lat, max_lat = lat - delta, lat + delta
+    min_lng, max_lng = lng - delta, lng + delta
+
+    def ranges(zoom: int):
+        x0, y0 = _lat_lng_to_tile(max_lat, min_lng, zoom)
+        x1, y1 = _lat_lng_to_tile(min_lat, max_lng, zoom)
+        return x0, y0, x1, y1
+
+    x_min, y_min, x_max, y_max = ranges(z)
+    while (x_max - x_min + 1) * (y_max - y_min + 1) > _MAX_TILES and z > 12:
+        z -= 1
+        x_min, y_min, x_max, y_max = ranges(z)
+
+    url_fn = lambda tx, ty, zoom: (
+        f"https://wayback.maptiles.arcgis.com/arcgis/rest/services/"
+        f"World_Imagery/MapServer/tile/{release_id}/{zoom}/{ty}/{tx}"
+    )
+    mosaic = _assemble_mercator_mosaic(
+        lat, lng, delta, z, x_min, y_min, x_max, y_max, url_fn
+    )
+    if mosaic is None:
+        return None
+    gsd = meters_per_pixel(lat, z)
+    logger.info(
+        "✅ Wayback release %s %d tiles at z=%d size=%s gsd=%.2fm",
+        release_id,
+        mosaic.info.get("tiles_fetched", "?"),
+        z,
+        mosaic.size,
+        gsd,
+    )
+    return _annotate(
+        mosaic,
+        source="esri-wayback",
+        release_id=release_id,
+        zoom=z,
+        gsd_m=round(gsd, 3),
+        pixels=list(mosaic.size),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -380,22 +482,22 @@ def _fetch_eox_cloudless(
     closest_year = min(_EOX_YEAR_LAYERS.keys(), key=lambda y: abs(y - year))
     layer = _EOX_YEAR_LAYERS[closest_year]
     bbox = f"{lng - delta},{lat - delta},{lng + delta},{lat + delta}"
-    
-    # EOX is Sentinel-2, native resolution ~10m/px.
-    span_meters = delta * 2.0 * 111320.0
-    native_px = max(16, min(2500, int(span_meters / 10.0)))
+    native_px = sentinel2_native_px(delta)
+    if native_px < 256:
+        return None
+    out_px = max(64, min(_MAX_OUTPUT_PX, native_px))
     
     url = (
         f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1"
         f"&layers={layer}&styles=&format=image/jpeg&srs=epsg:4326"
-        f"&bbox={bbox}&width={native_px}&height={native_px}"
+        f"&bbox={bbox}&width={out_px}&height={out_px}"
     )
     try:
         resp = httpx.get(url, timeout=15.0)
         if resp.status_code == 200 and len(resp.content) > 2000:
             img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-            logger.info("✅ EOX %s for year %d", layer, year)
-            return img
+            logger.info("✅ EOX %s for year %d (%s)", layer, year, img.size)
+            return _annotate(img, source=f"eox-{layer}", gsd_m=_S2_GSD_M, pixels=list(img.size))
     except Exception as e:
         logger.warning("EOX fetch error: %s", e)
     return None
@@ -496,50 +598,57 @@ def fetch_satellite_image(
     target_dt: datetime | None = None,
     change_type: str = "DEVELOPMENT / CONSTRUCTION",
     delta: float = 0.015,
-    tile_size: int = 1024,
+    tile_size: int = 1536,
+    exclude_wayback_ids: set[int] | None = None,
+    wayback_release_id: int | None = None,
 ) -> Image.Image:
     """
-    Fetch a real satellite image for the given role (before/after) and date.
-
-    Priority:
-      1. Sentinel Hub Process API — exact-date true-color Sentinel-2 L2A
-      2. Esri Wayback — historical sub-meter imagery for the correct year
-      3. EOX Sentinel-2 cloudless mosaic — year-specific cloud-free WMS
-      4. Spectrally-correct synthetic scene — always visually distinct before/after
+    Fetch dated real imagery. Small AOIs use Esri Wayback sub-meter tiles
+    (native GSD at the chosen zoom). Sentinel-2 10 m is used only when it
+    can fill the canvas without upsampling.
     """
-    now_year = 2026
-    if target_dt:
-        year = target_dt.year
-    else:
-        year = (now_year - 1) if role == "before" else now_year
+    now_year = datetime.utcnow().year
+    if target_dt is None:
+        target_dt = datetime(now_year - (1 if role == "before" else 0), 6, 15)
+    year = target_dt.year
+    target_px = max(512, min(_MAX_OUTPUT_PX, tile_size))
 
-    # ── 1. Sentinel Hub Process API ─────────────────────────────────────────
+    # 1. Dated high-resolution Wayback tiles (correct source for schools / small AOIs)
+    if wayback_release_id is not None:
+        release_id = wayback_release_id
+        release_date = ""
+    else:
+        release_id, release_date = _pick_wayback_release_for_date(target_dt, exclude_wayback_ids)
+    img = _fetch_wayback_tiles(lat, lng, delta, release_id, tile_size=target_px)
+    if img is not None:
+        return _annotate(img, **{**read_image_meta(img), "release_date": release_date, "role": role})
+
+    # 2. Sentinel-2 Process API — only when 10 m native pixels are enough
     if target_dt:
         if role == "before":
             sh_from = target_dt - timedelta(days=20)
-            sh_to   = target_dt + timedelta(days=10)
+            sh_to = target_dt + timedelta(days=10)
         else:
             sh_from = target_dt - timedelta(days=10)
-            sh_to   = target_dt + timedelta(days=20)
-
-        img = _fetch_sentinelhub_image(lat, lng, delta, sh_from, sh_to, tile_size)
+            sh_to = target_dt + timedelta(days=20)
+        img = _fetch_sentinelhub_image(lat, lng, delta, sh_from, sh_to, target_px)
         if img is not None:
             return img
 
-    # ── 2. Esri Wayback (year-matched release) ──────────────────────────────
-    release_id = _pick_wayback_release_for_year(year)
-    img = _fetch_wayback_tiles(lat, lng, delta, release_id, tile_size)
+    # 3. EOX cloudless (10 m, year mosaic) — skipped for tiny AOIs inside the helper
+    img = _fetch_eox_cloudless(lat, lng, delta, year, target_px)
     if img is not None:
         return img
 
-    # ── 3. EOX Sentinel-2 cloudless mosaic ──────────────────────────────────
-    img = _fetch_eox_cloudless(lat, lng, delta, year, tile_size)
-    if img is not None:
-        return img
+    if settings.offline_mode:
+        logger.warning("Offline mode — synthetic scene for %s", role)
+        img = _simulate_scene(lat, lng, role, target_dt, change_type, delta, target_px)
+        return _annotate(img, source="synthetic-offline", gsd_m=None, pixels=list(img.size))
 
-    # ── 4. Synthetic scene (spectrally distinct per role / season) ───────────
-    logger.warning("All real imagery sources failed — using synthetic scene for %s", role)
-    return _simulate_scene(lat, lng, role, target_dt or datetime(year, 6, 15), change_type, delta, tile_size)
+    raise RuntimeError(
+        f"No real satellite imagery was available for {role} at {lat:.5f},{lng:.5f} "
+        f"around {target_dt.date()}. Wayback, Sentinel Hub, and EOX all failed."
+    )
 
 
 def save_as_geotiff(
@@ -592,11 +701,17 @@ def fetch_and_write_satellite_raster(
     target_dt: datetime | None = None,
     change_type: str = "DEVELOPMENT / CONSTRUCTION",
     delta: float = 0.015,
-    tile_size: int = 1024,
+    tile_size: int = 1536,
     force_refresh: bool = False,
+    time_period: str | None = None,
+    exclude_wayback_ids: set[int] | None = None,
+    wayback_release_id: int | None = None,
 ) -> Path:
-    """High-level helper: fetch real satellite imagery for the exact date/span, then write GeoTIFF."""
+    """Fetch dated real imagery and write a GeoTIFF. `time_period` is an alias for role."""
+    if time_period and role == "after":
+        role = time_period
     out_p = Path(output_path)
+    meta_p = out_p.with_suffix(".json")
     if not force_refresh and out_p.exists() and out_p.stat().st_size > 5000:
         return out_p
 
@@ -609,6 +724,11 @@ def fetch_and_write_satellite_raster(
         change_type=change_type,
         delta=delta,
         tile_size=tile_size,
+        exclude_wayback_ids=exclude_wayback_ids,
+        wayback_release_id=wayback_release_id,
     )
     save_as_geotiff(img, out_p, lat, lng, delta=delta)
+    meta = read_image_meta(img)
+    meta.update({"width": img.size[0], "height": img.size[1], "role": role})
+    meta_p.write_text(json.dumps(meta), encoding="utf-8")
     return out_p
