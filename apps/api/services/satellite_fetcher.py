@@ -613,6 +613,13 @@ def fetch_satellite_image(
     year = target_dt.year
     target_px = max(512, min(_MAX_OUTPUT_PX, tile_size))
 
+    # Small/default investigations are faster and more reliable with the
+    # real EOX mosaic than with dozens of historical Wayback tile requests.
+    if sentinel2_native_px(delta) < 512:
+        img = _fetch_eox_cloudless(lat, lng, delta, year, target_px)
+        if img is not None:
+            return img
+
     # 1. Dated high-resolution Wayback tiles (correct source for schools / small AOIs)
     if wayback_release_id is not None:
         release_id = wayback_release_id
