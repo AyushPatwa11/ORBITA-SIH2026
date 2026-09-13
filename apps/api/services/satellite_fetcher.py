@@ -367,7 +367,12 @@ def _assemble_mercator_mosaic(
         tx, ty = coord
         url = url_fn(tx, ty, z)
         try:
-            resp = httpx.get(url, headers={"User-Agent": "ORBITA-SIH2026/1.0"}, timeout=12.0)
+            resp = httpx.get(
+                url,
+                headers={"User-Agent": "ORBITA-SIH2026/1.0"},
+                timeout=12.0,
+                follow_redirects=True,
+            )
             if resp.status_code == 200 and len(resp.content) > 500:
                 return tx, ty, Image.open(io.BytesIO(resp.content)).convert("RGB")
         except Exception as e:
@@ -433,7 +438,8 @@ def _fetch_wayback_tiles(
 
     url_fn = lambda tx, ty, zoom: (
         f"https://wayback.maptiles.arcgis.com/arcgis/rest/services/"
-        f"World_Imagery/MapServer/tile/{release_id}/{zoom}/{ty}/{tx}"
+        f"World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/"
+        f"{release_id}/{zoom}/{ty}/{tx}"
     )
     mosaic = _assemble_mercator_mosaic(
         lat, lng, delta, z, x_min, y_min, x_max, y_max, url_fn
@@ -613,14 +619,9 @@ def fetch_satellite_image(
     year = target_dt.year
     target_px = max(512, min(_MAX_OUTPUT_PX, tile_size))
 
-    # Small/default investigations are faster and more reliable with the
-    # real EOX mosaic than with dozens of historical Wayback tile requests.
-    if sentinel2_native_px(delta) < 512:
-        img = _fetch_eox_cloudless(lat, lng, delta, year, target_px)
-        if img is not None:
-            return img
-
-    # 1. Dated high-resolution Wayback tiles (correct source for schools / small AOIs)
+    # Prefer dated Wayback tiles for every AOI. Unlike Sentinel-2/EOX
+    # (10 m pixels), Wayback provides sub-meter imagery and therefore keeps
+    # small investigation areas sharp instead of enlarging a blurry mosaic.
     if wayback_release_id is not None:
         release_id = wayback_release_id
         release_date = ""
@@ -630,7 +631,14 @@ def fetch_satellite_image(
     if img is not None:
         return _annotate(img, **{**read_image_meta(img), "release_date": release_date, "role": role})
 
-    # 2. Sentinel-2 Process API — only when 10 m native pixels are enough
+    # EOX remains a real-data fallback when the historical tile release has
+    # no coverage for the requested location/date.
+    if sentinel2_native_px(delta) < 512:
+        img = _fetch_eox_cloudless(lat, lng, delta, year, target_px)
+        if img is not None:
+            return img
+
+    # Sentinel-2 Process API — only when 10 m native pixels are enough
     if target_dt:
         if role == "before":
             sh_from = target_dt - timedelta(days=20)

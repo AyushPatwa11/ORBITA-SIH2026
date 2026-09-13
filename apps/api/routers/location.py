@@ -428,7 +428,7 @@ async def pin_and_fetch_location(
             "change_area_m2": round(report.change_area_m2, 1),
             "change_area_pct": round(report.change_area_pct, 1),
             "total_area_m2": round(report.total_area_m2, 1),
-            "heatmap_url": f"/api/location/change-heatmap/{aoi.id}" if report.heatmap_path else None,
+            "heatmap_url": f"/location/change-heatmap/{aoi.id}" if report.heatmap_path else None,
             "confidence_explanation": report.confidence_explanation,
             "indicators": [
                 {

@@ -75,7 +75,7 @@ export function Investigation() {
 
   // Visualization modes: "rgb" (True Color), "false_color" (NIR), "night"
   const [visMode, setVisMode] = useState<"rgb" | "false_color" | "night">("rgb");
-  const [showMapHeatmap, setShowMapHeatmap] = useState<boolean>(false);
+  const [showMapHeatmap, setShowMapHeatmap] = useState<boolean>(true);
 
   // Imagery & Analysis state
   const [scenes, setScenes] = useState<Scene[]>([]);
@@ -724,7 +724,7 @@ ${agentSection}
         pinnedCoord={pinnedCoord}
         onMapPin={handleMapPin}
         analysisRadiusKm={analysisRadius}
-        heatmapUrl={changeReport?.heatmap_url}
+        heatmapUrl={changeReport?.heatmap_url ? api.absoluteUrl(changeReport.heatmap_url) : null}
         showHeatmapOverlay={showMapHeatmap}
         onToggleHeatmap={() => setShowMapHeatmap((prev) => !prev)}
       />

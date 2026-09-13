@@ -40,6 +40,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  absoluteUrl: (path: string) => (path.startsWith("http") ? path : `${BASE}${path}`),
+
   health: () => request<{ status: string; offline_mode: boolean; environment: string }>("/health"),
 
   listAOIs: () => request<AOI[]>("/aois"),

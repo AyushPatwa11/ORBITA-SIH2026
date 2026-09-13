@@ -220,6 +220,54 @@ export function MapView({
     }
   }, [pinnedCoord, analysisRadiusKm]);
 
+  // Display the generated spectral heatmap over the analyzed AOI.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !heatmapUrl || !pinnedCoord) return;
+
+    const sourceId = "change-heatmap-source";
+    const layerId = "change-heatmap-layer";
+    const [lng, lat] = pinnedCoord;
+    const radius = Math.max(0.1, Math.min(5, analysisRadiusKm || 1.5));
+    const deltaLat = radius / 111;
+    const deltaLng = radius / (111 * Math.max(0.01, Math.abs(Math.cos((lat * Math.PI) / 180))));
+    const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
+      [lng - deltaLng, lat + deltaLat],
+      [lng + deltaLng, lat + deltaLat],
+      [lng + deltaLng, lat - deltaLat],
+      [lng - deltaLng, lat - deltaLat],
+    ];
+
+    const install = () => {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      map.addSource(sourceId, { type: "image", url: heatmapUrl, coordinates });
+      map.addLayer({
+        id: layerId,
+        type: "raster",
+        source: sourceId,
+        paint: { "raster-opacity": showHeatmapOverlay ? 0.72 : 0 },
+      });
+    };
+
+    if (map.isStyleLoaded()) install();
+    else map.once("load", install);
+
+    return () => {
+      map.off("load", install);
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+    };
+  }, [heatmapUrl, pinnedCoord, analysisRadiusKm]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const layerId = "change-heatmap-layer";
+    if (map?.getLayer(layerId)) {
+      map.setPaintProperty(layerId, "raster-opacity", showHeatmapOverlay ? 0.72 : 0);
+    }
+  }, [showHeatmapOverlay]);
+
   // Working Interactive Box Drawing Engine
   useEffect(() => {
     const map = mapRef.current;
