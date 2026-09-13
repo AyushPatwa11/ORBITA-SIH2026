@@ -18,10 +18,19 @@ const BASE = (import.meta.env.VITE_API_URL || "https://orbita-sih2026.onrender.c
 console.log("[ORBITA] API base URL:", BASE);
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${BASE}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch (error) {
+    throw new Error(
+      `Could not reach the API at ${BASE}. Check the backend deployment and CORS settings. ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
   if (!resp.ok) {
     const body = await resp.text();
     throw new Error(`${resp.status} ${resp.statusText}: ${body}`);

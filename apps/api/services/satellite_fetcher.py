@@ -483,9 +483,9 @@ def _fetch_eox_cloudless(
     layer = _EOX_YEAR_LAYERS[closest_year]
     bbox = f"{lng - delta},{lat - delta},{lng + delta},{lat + delta}"
     native_px = sentinel2_native_px(delta)
-    if native_px < 256:
-        return None
-    out_px = max(64, min(_MAX_OUTPUT_PX, native_px))
+    # Keep small AOIs on the real EOX mosaic instead of failing the complete
+    # request when Wayback has no usable historical tiles.
+    out_px = max(256, min(_MAX_OUTPUT_PX, native_px))
     
     url = (
         f"https://tiles.maps.eox.at/wms?service=wms&request=getmap&version=1.1.1"
