@@ -16,13 +16,24 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    allowed_origins = [
-        "http://localhost:5173",
-        settings.frontend_url,
-    ]
+    allowed_origins = _cors_origins()
     logger.info("CORS allowed origins: %s", allowed_origins)
     await init_db()
     yield
+
+
+def _cors_origins() -> list[str]:
+    configured = [
+        origin.strip().rstrip("/")
+        for origin in settings.cors_allowed_origins.split(",")
+        if origin.strip()
+    ]
+    defaults = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        settings.frontend_url,
+    ]
+    return list(dict.fromkeys(configured + defaults))
 
 
 app = FastAPI(
@@ -34,7 +45,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", settings.frontend_url],
+    allow_origins=_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

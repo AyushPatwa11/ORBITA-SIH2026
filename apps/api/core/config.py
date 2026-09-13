@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     frontend_url: str = "https://orbita-sih-2026.vercel.app"
+    cors_allowed_origins: str = ""
 
 
 settings = Settings()
