@@ -535,7 +535,7 @@ async def pin_and_fetch_location(
             "acquisition_time": before_scene.acquisition_time.isoformat(),
             "sensor": before_scene.sensor,
             "cloud_cover": before_scene.cloud_cover,
-            "preview_url": f"/api/scenes/{before_scene.id}/preview.png",
+            "preview_url": f"/scenes/{before_scene.id}/preview.png",
         },
         "after_scene": {
             "id": str(after_scene.id),
@@ -543,7 +543,7 @@ async def pin_and_fetch_location(
             "acquisition_time": after_scene.acquisition_time.isoformat(),
             "sensor": after_scene.sensor,
             "cloud_cover": after_scene.cloud_cover,
-            "preview_url": f"/api/scenes/{after_scene.id}/preview.png",
+            "preview_url": f"/scenes/{after_scene.id}/preview.png",
         },
         "time_span_days": time_span_days,
         "change_report": change_report,

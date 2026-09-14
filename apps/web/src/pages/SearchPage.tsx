@@ -51,6 +51,7 @@ export function SearchPage() {
   const [selectedEvent, setSelectedEvent] = useState<ChangeEvent | null>(null);
   const [intelligenceAnswer, setIntelligenceAnswer] = useState<string | null>(null);
   const [sceneResults, setSceneResults] = useState<SimilarScene[]>([]);
+  const [visualSearchStatus, setVisualSearchStatus] = useState<string | null>(null);
 
   // Search History
   const [history, setHistory] = useState<SearchHistoryItem[]>(() => {
@@ -154,9 +155,18 @@ export function SearchPage() {
 
       // Also run vector embedding search for visual similarity
       try {
+        setVisualSearchStatus(null);
         const scenes = await api.semanticSearch(q, 6);
         setSceneResults(scenes);
-      } catch {}
+        if (scenes.length === 0) {
+          setVisualSearchStatus("No indexed scenes matched this intent yet. The brief below is grounded in detected change events.");
+        }
+      } catch {
+        setSceneResults([]);
+        setVisualSearchStatus(
+          "Visual embeddings are not indexed in this environment. Evidence Fusion Mode is using real change events, confidence, and spectral observations instead."
+        );
+      }
 
       // Save search to history
       const historyItem: SearchHistoryItem = {
@@ -238,6 +248,43 @@ export function SearchPage() {
             <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: "var(--text-hi)" }}>
               {intelligenceAnswer}
             </p>
+          </div>
+        )}
+
+        {intelligenceAnswer && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gap: 6,
+              marginTop: 8,
+            }}
+          >
+            <div className="card" style={{ padding: "8px 10px" }}>
+              <div style={{ color: "var(--text-low)", fontSize: 9, textTransform: "uppercase" }}>Evidence Fusion</div>
+              <strong style={{ fontSize: 12, color: "var(--good)" }}>
+                {matchedEvents.length ? "ACTIVE" : "READY"}
+              </strong>
+            </div>
+            <div className="card" style={{ padding: "8px 10px" }}>
+              <div style={{ color: "var(--text-low)", fontSize: 9, textTransform: "uppercase" }}>High-confidence</div>
+              <strong style={{ fontSize: 12, color: "var(--accent)" }}>
+                {matchedEvents.filter((event) => event.confidence >= 0.7).length} / {matchedEvents.length}
+              </strong>
+            </div>
+            <div className="card" style={{ padding: "8px 10px" }}>
+              <div style={{ color: "var(--text-low)", fontSize: 9, textTransform: "uppercase" }}>Priority</div>
+              <strong style={{ fontSize: 12, color: matchedEvents.some((event) => event.confidence >= 0.8) ? "#f59e0b" : "var(--text-hi)" }}>
+                {matchedEvents.some((event) => event.confidence >= 0.8) ? "REVIEW NOW" : "MONITOR"}
+              </strong>
+            </div>
+          </div>
+        )}
+
+        {visualSearchStatus && (
+          <div className="alert-banner info" style={{ marginTop: 8, fontSize: 10.5 }}>
+            <Sparkles size={12} />
+            <span>{visualSearchStatus}</span>
           </div>
         )}
 

@@ -40,7 +40,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  absoluteUrl: (path: string) => (path.startsWith("http") ? path : `${BASE}${path}`),
+  absoluteUrl: (path: string) => {
+    if (path.startsWith("http")) return path;
+    const normalizedPath = path.startsWith("/api/") ? path.slice(4) : path;
+    return `${BASE}${normalizedPath}`;
+  },
 
   health: () => request<{ status: string; offline_mode: boolean; environment: string }>("/health"),
 

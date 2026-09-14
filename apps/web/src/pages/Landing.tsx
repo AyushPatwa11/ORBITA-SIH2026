@@ -152,7 +152,16 @@ export function Landing() {
         </div>
 
         {/* Primary Visual Hierarchy 4: Globe Animation as Supporting Visual */}
-        <div style={{ position: "relative", flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
           <GlobeHero />
         </div>
       </section>
