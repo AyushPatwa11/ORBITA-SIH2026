@@ -8,11 +8,19 @@ from apps.api.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _async_database_url(url: str) -> str:
+    """Use asyncpg for standard Render/Postgres connection URLs."""
+    for prefix in ("postgres://", "postgresql://", "postgresql+psycopg2://"):
+        if url.startswith(prefix):
+            return "postgresql+asyncpg://" + url[len(prefix) :]
+    return url
+
+
 class Base(DeclarativeBase):
     pass
 
 
-engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
+engine = create_async_engine(_async_database_url(settings.database_url), echo=False, pool_pre_ping=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
@@ -37,4 +45,3 @@ async def init_db():
         logger.warning("Database bootstrap skipped because the Postgres/PostGIS service is unavailable: %s", exc)
         # Leave the API available in degraded mode; routes that need a database
         # should return an empty list / safe error instead of crashing the app.
-
