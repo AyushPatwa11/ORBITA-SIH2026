@@ -289,8 +289,10 @@ async def pin_and_fetch_location(
     lon_max = lng + delta_lng
     lat_max = lat + delta_lat
 
-    # High-definition sampling across all radii to preserve micro-detail
-    tile_size = 1024
+    # Keep the Render free-tier request below its 512 MB memory limit. The
+    # satellite fetcher and raster analysis each allocate working buffers, so
+    # two 1024px rasters in parallel can exceed the process limit.
+    tile_size = 512
 
     polygon_wkt = (
         f"POLYGON(({lon_min} {lat_min}, {lon_max} {lat_min}, "
@@ -322,35 +324,34 @@ async def pin_and_fetch_location(
 
     delta_deg = max(delta_lat, delta_lng)
 
-    # Concurrent parallel fetch to cut retrieval latency in half
+    # Fetch sequentially to avoid holding both image pipelines in memory at
+    # the same time on small Render instances.
     try:
-        await asyncio.gather(
-            asyncio.to_thread(
-                fetch_and_write_satellite_raster,
-                b_raster_path,
-                lat,
-                lng,
-                role="before",
-                time_preset=payload.time_preset,
-                target_dt=before_dt,
-                change_type=change_type,
-                delta=delta_deg,
-                tile_size=tile_size,
-                force_refresh=True,
-            ),
-            asyncio.to_thread(
-                fetch_and_write_satellite_raster,
-                a_raster_path,
-                lat,
-                lng,
-                role="after",
-                time_preset=payload.time_preset,
-                target_dt=after_dt,
-                change_type=change_type,
-                delta=delta_deg,
-                tile_size=tile_size,
-                force_refresh=True,
-            ),
+        await asyncio.to_thread(
+            fetch_and_write_satellite_raster,
+            b_raster_path,
+            lat,
+            lng,
+            role="before",
+            time_preset=payload.time_preset,
+            target_dt=before_dt,
+            change_type=change_type,
+            delta=delta_deg,
+            tile_size=tile_size,
+            force_refresh=True,
+        )
+        await asyncio.to_thread(
+            fetch_and_write_satellite_raster,
+            a_raster_path,
+            lat,
+            lng,
+            role="after",
+            time_preset=payload.time_preset,
+            target_dt=after_dt,
+            change_type=change_type,
+            delta=delta_deg,
+            tile_size=tile_size,
+            force_refresh=True,
         )
     except RuntimeError as exc:
         logger.error("Satellite imagery retrieval failed: %s", exc)
