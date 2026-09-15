@@ -15,20 +15,22 @@ export function GlobeHero() {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-    // The hero's right column can be narrow on laptop viewports; pull the
-    // camera back there so the full globe remains visible instead of clipping.
-    camera.position.set(0, 0.6, width < height ? 6.2 : 4.2);
+    const fitCameraToGlobe = () => {
+      const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+      const halfFovTangent = Math.tan(verticalFov / 2);
+      const aspect = camera.aspect;
+      const globeRadius = 1.92;
+      const fitMargin = 1.3;
+      const distance = (globeRadius * fitMargin) / Math.min(halfFovTangent, halfFovTangent * aspect);
+      camera.position.set(0, 0.6, distance);
+    };
+    camera.position.set(0, 0.6, 5);
+    fitCameraToGlobe();
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
-
-    // Place the dark body first so the animated wireframe remains visible.
-    const innerGeo = new THREE.SphereGeometry(1.58, 32, 32);
-    const innerMat = new THREE.MeshBasicMaterial({ color: 0x071322, transparent: true, opacity: 0.92 });
-    const inner = new THREE.Mesh(innerGeo, innerMat);
-    scene.add(inner);
 
     const globeGeo = new THREE.IcosahedronGeometry(1.62, 3);
     const globeMat = new THREE.MeshBasicMaterial({
@@ -41,17 +43,6 @@ export function GlobeHero() {
     const globe = new THREE.Mesh(globeGeo, globeMat);
     globe.renderOrder = 2;
     scene.add(globe);
-
-    const atmosphereGeo = new THREE.SphereGeometry(1.72, 32, 32);
-    const atmosphereMat = new THREE.MeshBasicMaterial({
-      color: 0x168cff,
-      transparent: true,
-      opacity: 0.08,
-      side: THREE.BackSide,
-      depthWrite: false,
-    });
-    const atmosphere = new THREE.Mesh(atmosphereGeo, atmosphereMat);
-    scene.add(atmosphere);
 
     const orbitGeo = new THREE.TorusGeometry(1.92, 0.008, 8, 128);
     const orbitMat = new THREE.MeshBasicMaterial({ color: 0x00d2ff, transparent: true, opacity: 0.55 });
@@ -97,8 +88,6 @@ export function GlobeHero() {
     const animate = () => {
       frame += 1;
       globe.rotation.y += activeRef.current ? 0.006 : 0.0016;
-      inner.rotation.y = globe.rotation.y * 0.9;
-      atmosphere.rotation.y -= 0.0007;
       orbit.rotation.z += 0.002;
       stars.rotation.y -= 0.00025;
 
@@ -126,6 +115,7 @@ export function GlobeHero() {
       const h = mount.clientHeight;
       renderer.setSize(w, h);
       camera.aspect = w / h;
+      fitCameraToGlobe();
       camera.updateProjectionMatrix();
     };
     window.addEventListener("resize", handleResize);
@@ -135,14 +125,10 @@ export function GlobeHero() {
       window.removeEventListener("resize", handleResize);
       globeGeo.dispose();
       globeMat.dispose();
-      innerGeo.dispose();
-      innerMat.dispose();
       orbitGeo.dispose();
       orbitMat.dispose();
       satGeo.dispose();
       satMat.dispose();
-      atmosphereGeo.dispose();
-      atmosphereMat.dispose();
       starGeo.dispose();
       starMat.dispose();
       renderer.dispose();

@@ -76,6 +76,7 @@ body,
 /* App Shell */
 .app-shell {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 54px 1fr;
   height: 100vh;
   overflow: hidden;
@@ -231,6 +232,7 @@ body,
 .route-area {
   height: calc(100vh - 54px);
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   position: relative;
 }
@@ -848,12 +850,13 @@ label {
 /* Landing Page Styles */
 .landing-hero {
   position: relative;
-  height: 82vh;
-  min-height: 520px;
+  width: 100%;
+  height: calc(100vh - 54px);
+  min-height: 0;
   display: flex;
   align-items: center;
   overflow: hidden;
-  border-bottom: 1px solid var(--border);
+  z-index: 1;
   background: radial-gradient(ellipse at 75% 45%, #0f2038 0%, var(--bg-0) 70%);
 }
 
@@ -861,11 +864,13 @@ label {
   position: absolute;
   inset: 0;
   z-index: 0;
+  min-width: 0;
 }
 
 .landing-hero-copy {
   position: relative;
   z-index: 2;
+  min-width: 0;
   max-width: 680px;
   padding: 0 54px;
 }
@@ -914,6 +919,7 @@ label {
 
 .landing-cta-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -989,6 +995,34 @@ label {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+@media (max-width: 900px) {
+  .landing-hero-copy {
+    padding: 0 32px;
+  }
+}
+
+@media (max-width: 640px) {
+  .landing-hero {
+    min-height: calc(100vh - 54px);
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .landing-hero-copy {
+    width: 100%;
+    max-width: none;
+    padding: 48px 24px 0;
+  }
+
+  .landing-hero > div:last-child {
+    width: 100%;
+    flex: 0 0 360px;
+    min-width: 0;
+    min-height: 360px;
+  }
 }
 
 /* Animations */

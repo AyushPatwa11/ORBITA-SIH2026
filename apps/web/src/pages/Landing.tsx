@@ -167,7 +167,7 @@ export function Landing() {
       </section>
 
       {/* Core Platform Modules */}
-      <section className="landing-section" style={{ paddingBottom: 24 }}>
+      <section className="landing-section" style={{ paddingTop: 120, paddingBottom: 24 }}>
         <div className="section-title" style={{ fontSize: 13, marginBottom: 16 }}>
           <span>Operational Modules</span>
         </div>
