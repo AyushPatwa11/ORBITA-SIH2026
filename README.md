@@ -1,5 +1,5 @@
 # 🛰️ ORBITA — Autonomous Semantic Earth Observation & Change Intelligence Platform
-> **Smart India Hackathon (SIH 2026) · Problem Statement SIH26227 · Team PHOTONS**  
+> **Smart India Hackathon (SIH 2026) · Problem Statement SIH26227 · Team PHOTONS.**  
 > *Transforming multi-temporal petabyte-scale satellite imagery into actionable, verified geospatial intelligence.*
 
 ---
@@ -295,7 +295,7 @@ In adherence to scientific integrity and SIH evaluation standards:
 ## 👥 Team PHOTONS (SIH 2026)
 
 Developed with passion and engineering rigor for the **Smart India Hackathon 2026**:
-* **Team**: PHOTONS
+* **Team**: PHOTONS.
 * **Problem Code**: SIH26227
 * **Domain**: Earth Observation, Satellite Remote Sensing & AI for Governance
 
