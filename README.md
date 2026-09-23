@@ -292,7 +292,7 @@ In adherence to scientific integrity and SIH evaluation standards:
 
 ---
 
-## 👥 Team PHOTONS (SIH 2026)
+## 👥 Team PHOTONS. (SIH 2026)
 
 Developed with passion and engineering rigor for the **Smart India Hackathon 2026**:
 * **Team**: PHOTONS.
